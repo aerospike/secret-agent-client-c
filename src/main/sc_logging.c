@@ -26,7 +26,8 @@ sc_log_func* sc_g_log_function = sc_default_logger;
 //
 
 void
-sc_set_log_function(sc_log_func* f) {
+sc_set_log_function(sc_log_func* f)
+{
 	sc_g_log_function = f;
 }
 

@@ -12,7 +12,7 @@
 
 typedef void sc_log_func(const char* format, ...);
 
-sc_log_func* sc_g_log_function;
+extern sc_log_func* sc_g_log_function;
 
 void sc_set_log_function(sc_log_func* f);
 
