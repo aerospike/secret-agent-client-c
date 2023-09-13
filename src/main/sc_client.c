@@ -33,13 +33,6 @@
 
 #include "jansson.h"
 
-
-//==========================================================
-// Typedefs & constants.
-//
-
-#define SC_SECRETS_PATH_REFIX "secrets:"
-
 //==========================================================
 // Public API.
 //

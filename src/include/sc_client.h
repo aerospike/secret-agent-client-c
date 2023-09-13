@@ -23,6 +23,8 @@
 
 // TODO use this on public functions and hide the rest #define SC_PUBLIC_API __attribute__ ((visibility ("default")))
 
+#define SC_SECRETS_PATH_REFIX "secrets:"
+
 /*
  * sc_cfg defines the configuration for the secret client sc_client.
  * sc_cfg should be initialised using sc_cfg_init or sc_cfg_new
