@@ -17,7 +17,6 @@
 #include "sc_tls.h"
 #include "sc_logging.h"
 
-#include <assert.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
@@ -32,40 +31,20 @@
 #include <poll.h>
 #include <fcntl.h>
 
-int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
-{
-    int bytes_read = 0;
-    int result = 0;
-    short poll_res = 0;
-    while (true)
-    {
-        result = socket_wait(sock, timeout_ms, true, &poll_res);
-        if (result <= 0) {
-            sc_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d, errno: %d", result, poll_res, errno);
-            return result;
-        }
+//==========================================================
+// Forward Declarations.
+//
 
-        result = read(sock->fd, buffer + bytes_read, n - bytes_read);
-        if (result < 0 ) {
-            sc_g_log_function("ERR: socket read failed, return value: %d, errno: %d", result, errno);
-            return result;
-        }
+int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 
-        if (result == 0) {
-            // end of transmission
-            return result;
-        }
-
-        bytes_read += result;
-        if (bytes_read >= n) {
-            return result;
-        }
-    }
-}
+//==========================================================
+// Public API.
+//
 
 int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
-    if (sock->tls_cfg != NULL) {
+    if (sock->tls_cfg->enabled) {
         return tls_read_n_bytes(sock, buffer, n, timeout_ms);
     }
     else {
@@ -73,37 +52,10 @@ int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
     }
 }
 
-int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
-{
-    int bytes_written = 0;
-    int result = 0;
-    short poll_res = 0;
-    while (true)
-    {
-        result = socket_wait(sock, timeout_ms, false, &poll_res);
-        if (result <= 0) {
-            sc_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", result, poll_res, errno);
-            return result;
-        }
-
-        result = write(sock->fd, buffer + bytes_written, n - bytes_written);
-        if (result < 0 )
-        {
-            sc_g_log_function("ERR: socket write failed, return value: %d, errno: %d", result, errno);
-            return result;
-        }
-
-        bytes_written += result;
-        if (bytes_written >= n) {
-            return result;
-        }
-    }
-}
-
 // This assumes buffer is at least n bytes long
 int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
-    if (sock->tls_cfg != NULL) {
+    if (sock->tls_cfg->enabled) {
         return tls_write(sock, buffer, n, timeout_ms);
     }
     else {
@@ -174,8 +126,8 @@ connect_addr_port(const char* addr, const char* port, const sc_tls_cfg* tls_cfg,
 		return NULL;
     }
 
-    if (tls_cfg != NULL) {
-        sock->tls_cfg = tls_cfg;
+    sock->tls_cfg = tls_cfg;
+    if (tls_cfg->enabled) {
         init_openssl();
         wrap_socket(sock);
         connect_res = tls_connect(sock, timeout_ms);
@@ -234,4 +186,80 @@ socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
     }
 
     return rv;
+}
+
+sc_tls_cfg*
+sc_tls_cfg_init(sc_tls_cfg* cfg) {
+    cfg->ca_string = NULL;
+    cfg->enabled = false;
+    return cfg;
+}
+
+sc_tls_cfg*
+sc_tls_cfg_new() {
+    sc_tls_cfg* cfg = (sc_tls_cfg*) malloc(sizeof(sc_tls_cfg));
+    sc_tls_cfg_init(cfg);
+    return cfg;
+}
+
+//==========================================================
+// Private Helpers.
+//
+
+int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+{
+    int bytes_read = 0;
+    int result = 0;
+    short poll_res = 0;
+    while (true)
+    {
+        result = socket_wait(sock, timeout_ms, true, &poll_res);
+        if (result <= 0) {
+            sc_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d, errno: %d", result, poll_res, errno);
+            return result;
+        }
+
+        result = read(sock->fd, buffer + bytes_read, n - bytes_read);
+        if (result < 0 ) {
+            sc_g_log_function("ERR: socket read failed, return value: %d, errno: %d", result, errno);
+            return result;
+        }
+
+        if (result == 0) {
+            // end of transmission
+            return result;
+        }
+
+        bytes_read += result;
+        if (bytes_read >= n) {
+            return result;
+        }
+    }
+}
+
+int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+{
+    int bytes_written = 0;
+    int result = 0;
+    short poll_res = 0;
+    while (true)
+    {
+        result = socket_wait(sock, timeout_ms, false, &poll_res);
+        if (result <= 0) {
+            sc_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", result, poll_res, errno);
+            return result;
+        }
+
+        result = write(sock->fd, buffer + bytes_written, n - bytes_written);
+        if (result < 0 )
+        {
+            sc_g_log_function("ERR: socket write failed, return value: %d, errno: %d", result, errno);
+            return result;
+        }
+
+        bytes_written += result;
+        if (bytes_written >= n) {
+            return result;
+        }
+    }
 }

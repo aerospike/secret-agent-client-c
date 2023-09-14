@@ -78,7 +78,7 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 		key++;
 	}
 
-    sc_socket* sock = connect_addr_port(cfg->addr, cfg->port, cfg->tls, cfg->timeout);
+    sc_socket* sock = connect_addr_port(cfg->addr, cfg->port, &cfg->tls, cfg->timeout);
 
 	if (sock == NULL) {
 		sc_g_log_function("ERR: failed to create socket");
@@ -116,7 +116,7 @@ sc_cfg_init(sc_cfg* cfg) {
 	cfg->addr = NULL;
 	cfg->port = NULL;
 	cfg->timeout = 1000;
-	cfg->tls = NULL;
+	sc_tls_cfg_init(&cfg->tls);
 	return cfg;
 }
 

@@ -35,7 +35,7 @@ typedef struct sc_cfg_s
 	const char* addr; // address of the secret agent
 	const char* port; // port the secret agent is running on
 	int timeout; // timeout in milliseconds
-	sc_tls_cfg* tls; // tls configuration
+	sc_tls_cfg tls; // tls configuration
 } sc_cfg;
 
 /*

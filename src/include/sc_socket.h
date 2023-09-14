@@ -16,6 +16,7 @@
 
 typedef struct sc_tls_cfg_s {
     const char* ca_string;
+    bool enabled;
 } sc_tls_cfg;
 
 typedef struct sc_socket_s {
@@ -33,3 +34,7 @@ int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 
 // return of <= 0 == failure
 int socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res);
+
+sc_tls_cfg* sc_tls_cfg_init(sc_tls_cfg* cfg);
+
+sc_tls_cfg* sc_tls_cfg_new();

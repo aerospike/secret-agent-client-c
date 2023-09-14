@@ -80,16 +80,12 @@ Request a secret over TCP with TLS and logging.
     // read_cert_file reads out the entire cert file
     cacert = read_cert_file(capath);
 
-    sc_tls_cfg tls = {
-        .ca_string = cacert
-    };
-
     sc_cfg cfg;
     sc_cfg_init(&cfg);
     cfg.addr = addr;
     cfg.port = port;
     cfg.timeout = 3000;
-    cfg.tls = &tls;
+    cfg.tls.ca_string = cacert;
 
     sc_client c;
     sc_client_init(&c, &cfg);

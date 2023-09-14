@@ -186,16 +186,12 @@ void test_sc_secret_get_bytes_tls()
     char* cacert = NULL;
     cacert = readCertFile(capath);
 
-    sc_tls_cfg tls = {
-        .ca_string = cacert
-    };
-
     sc_cfg cfg;
     sc_cfg_init(&cfg);
     cfg.addr = addr;
     cfg.port = port;
     cfg.timeout = 3000;
-    cfg.tls = &tls;
+    cfg.tls.ca_string = cacert;
 
     sc_client c;
     sc_client_init(&c, &cfg);
