@@ -46,8 +46,8 @@ void test_sc_secret_get_bytes()
 {
     const char* expected = "127.0.0.1";
 
-    const char* addr = AGENT_ADDR;
-    const char* port = AGENT_PORT;
+    char* addr = AGENT_ADDR;
+    char* port = AGENT_PORT;
 
     sc_cfg cfg;
     sc_cfg_init(&cfg);
@@ -77,8 +77,8 @@ void test_sc_secret_get_bytes()
 void test_sc_secret_get_bytes_bad_address()
 {
     // bad ip
-    const char* addr = "256.0.0.0";
-    const char* port = AGENT_PORT;
+    char* addr = "256.0.0.0";
+    char* port = AGENT_PORT;
 
     sc_cfg cfg;
     sc_cfg_init(&cfg);
@@ -102,9 +102,9 @@ void test_sc_secret_get_bytes_bad_address()
 
 void test_sc_secret_get_bytes_bad_port()
 {
-    const char* addr = AGENT_ADDR;
+    char* addr = AGENT_ADDR;
     // bad port
-    const char* port = "0";
+    char* port = "0";
 
     sc_cfg cfg;
     sc_cfg_init(&cfg);
@@ -128,9 +128,9 @@ void test_sc_secret_get_bytes_bad_port()
 
 void test_sc_secret_get_bytes_bad_secret()
 {
-    const char* addr = AGENT_ADDR;
+    char* addr = AGENT_ADDR;
     // bad port
-    const char* port = AGENT_PORT;
+    char* port = AGENT_PORT;
 
     sc_cfg cfg;
     sc_cfg_init(&cfg);
@@ -154,9 +154,9 @@ void test_sc_secret_get_bytes_bad_secret()
 
 void test_sc_secret_get_bytes_missing_resource_name()
 {
-    const char* addr = AGENT_ADDR;
+    char* addr = AGENT_ADDR;
     // bad port
-    const char* port = AGENT_PORT;
+    char* port = AGENT_PORT;
 
     sc_cfg cfg;
     sc_cfg_init(&cfg);
@@ -182,8 +182,8 @@ void test_sc_secret_get_bytes_tls()
 {
     const char* expected = "127.0.0.1";
 
-    const char* addr = AGENT_ADDR_TLS;
-    const char* port = AGENT_PORT_TLS;
+    char* addr = AGENT_ADDR_TLS;
+    char* port = AGENT_PORT_TLS;
 
     const char* capath = "./src/test/test-data/cacert.pem";
     char* cacert = NULL;

@@ -15,17 +15,17 @@
 #include <openssl/ssl.h>
 
 typedef struct sc_tls_cfg_s {
-    const char* ca_string;
+    char* ca_string;
     bool enabled;
 } sc_tls_cfg;
 
 typedef struct sc_socket_s {
     int fd;
     SSL* ssl;
-    const sc_tls_cfg* tls_cfg;
+    sc_tls_cfg* tls_cfg;
 } sc_socket;
 
-sc_socket* connect_addr_port(const char* addr, const char* port, const sc_tls_cfg* tls_cfg, int timeout_ms);
+sc_socket* connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms);
 
 int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 

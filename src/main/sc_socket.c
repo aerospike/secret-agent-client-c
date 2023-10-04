@@ -70,7 +70,7 @@ int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 }
 
 sc_socket* 
-connect_addr_port(const char* addr, const char* port, const sc_tls_cfg* tls_cfg, int timeout_ms)
+connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms)
 {
 
     long port_num = strtol(port, NULL, 10);
