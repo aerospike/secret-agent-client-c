@@ -30,6 +30,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <netdb.h>
 
 //==========================================================
 // Forward Declarations.
@@ -37,6 +38,7 @@
 
 int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
 
 //==========================================================
 // Public API.
@@ -70,67 +72,61 @@ int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 sc_socket* 
 connect_addr_port(const char* addr, const char* port, const sc_tls_cfg* tls_cfg, int timeout_ms)
 {
-    int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock_fd < 0)
-	{
-		sc_g_log_function("ERR: could not create socket returned: %d", sock_fd);
-		return NULL;
-	}
 
+    long port_num = strtol(port, NULL, 10);
+    if (port_num < 1 || port_num > 65535) {
+		sc_g_log_function("ERR: port: %ld is outside the valid port range 1 - 65535", port_num);
+		return NULL;
+    }
+
+    struct addrinfo *host_info, *p;
+    int lookup_res = lookup_host(addr, port, &host_info);
+    if (lookup_res != 0) {
+		sc_g_log_function("ERR: failed to lookup address: %s");
+		return NULL;
+    }
+
+    int sock_fd;
+    // loop through all the results and connect to the first we can
+    for(p = host_info; p != NULL; p = p->ai_next) {
+        if ((sock_fd = socket(p->ai_family, p->ai_socktype,
+                p->ai_protocol)) == -1) {
+            continue;
+        }
+
+        if (connect(sock_fd, p->ai_addr, p->ai_addrlen) == -1) {
+            close(sock_fd);
+            continue;
+        }
+
+        break; // successfully connected
+    }
+
+    if (p == NULL) {
+        // looped off the end of the list with no connection
+        sc_g_log_function("ERR: connect failed: %d, errno: %d", sock_fd, errno);
+        freeaddrinfo(host_info);
+        return NULL;
+    }
+
+    freeaddrinfo(host_info);
+
+    // mark the socket as non-blocking
     int fcntl_res = fcntl(sock_fd, F_SETFL, O_NONBLOCK);
     if (fcntl_res < 0) {
         sc_g_log_function("ERR: could not set socket to non-blocking: %d", fcntl_res);
         return NULL;
     }
 
-    struct sockaddr_in sc_addr = { 0 };
-
-    long port_num = strtol(port, NULL, 10);
-    // this assumes in_port_t is unsigned
-    if (port_num > (in_port_t) -1) {
-		sc_g_log_function("ERR: port: %d is larger than max in_port_t", port_num);
-        close(sock_fd);
-		return NULL;
-    }
-
-    in_port_t sin_port = (in_port_t) port_num;
-    if (sin_port < 1 || sin_port > 65535) {
-		sc_g_log_function("ERR: port: %d is outside the valid port range 1 - 65535", sin_port);
-        close(sock_fd);
-		return NULL;
-    }
-
-    sin_port = htons(sin_port);
-    sc_addr.sin_port = sin_port;
-
-	sc_addr.sin_family = AF_INET;
-
-	if (inet_pton(AF_INET, addr, &sc_addr.sin_addr)<=0) {
-		sc_g_log_function("ERR: address: %s:%s is an invalid AF_INET address", addr, port);
-        close(sock_fd);
-		return NULL;
-	}
-
-    // must be freed by caller
+    // wrap the socket, must be freed by caller
     sc_socket* sock = (sc_socket*) malloc(sizeof(sc_socket));
     sock->fd = sock_fd;
-
-    int connect_res = connect(sock_fd, (struct sockaddr *)&sc_addr, sizeof(sc_addr));
-
-    // connect may return -1 because the socket is non blocking and the connection is not finished
-    // if errno == EINPROGRESS, this is the case, and the socket should be ready for use later
-    if (connect_res < 0 && errno != EINPROGRESS) {
-		sc_g_log_function("ERR: connect failed: %d, errno: %d", connect_res, errno);
-        close(sock_fd);
-        free(sock);
-		return NULL;
-    }
 
     sock->tls_cfg = tls_cfg;
     if (tls_cfg->enabled) {
         init_openssl();
         wrap_socket(sock);
-        connect_res = tls_connect(sock, timeout_ms);
+        int connect_res = tls_connect(sock, timeout_ms);
 
         if (connect_res < 0) {
             sc_g_log_function("ERR: tls connection failed: %d", connect_res);
@@ -262,4 +258,34 @@ int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms
             return result;
         }
     }
+}
+
+// return != 0 == failure
+int
+lookup_host(const char* hostname, const char* port, struct addrinfo** res)
+{
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	// Check if hostname is really an IPv4 address.
+	struct in_addr ipv4;
+
+	if (inet_pton(AF_INET, hostname, &ipv4) == 1) {
+		hints.ai_family = AF_INET;
+		hints.ai_flags = AI_NUMERICHOST;
+	}
+	else {
+		// Check if hostname is really an IPv6 address.
+		struct in6_addr ipv6;
+		
+		if (inet_pton(AF_INET6, hostname, &ipv6) == 1) {
+			hints.ai_family = AF_INET6;
+			hints.ai_flags = AI_NUMERICHOST;
+		}
+	}
+
+	int ret = getaddrinfo(hostname, port, &hints, res);
+	return ret;
 }

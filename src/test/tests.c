@@ -67,7 +67,10 @@ void test_sc_secret_get_bytes()
     sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
     
     assert(err.code == SC_OK);
+
+    secret[result_size] = 0;
     assert(!strcmp(expected, (char*)secret));
+
     free(secret);
 }
 
@@ -205,7 +208,10 @@ void test_sc_secret_get_bytes_tls()
     sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
     
     assert(err.code == SC_OK);
+
+    secret[result_size] = 0;
     assert(!strcmp(expected, (char*)secret));
+
     free(secret);
 }
 
