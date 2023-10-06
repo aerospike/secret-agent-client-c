@@ -35,7 +35,7 @@ char* readCertFile(const char* path)
     flen = ftell(fptr);
     rewind(fptr);
 
-    char* buff = (char*) malloc(flen * sizeof(char));
+    char* buff = (char*) malloc(flen);
     fread(buff, flen, 1, fptr);
     fclose(fptr);
 

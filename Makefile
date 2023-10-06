@@ -146,5 +146,5 @@ test: $(TARGET_TEST)
 	./src/test/tests
 
 $(TARGET_TEST): all
-	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -lsecrets-client-c -lssl -lcrypto -ljansson -o $@
+	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -l:libsecrets-client-c.a -lssl -lcrypto -ljansson -o $@
 	$(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecrets-client-c -o $@
