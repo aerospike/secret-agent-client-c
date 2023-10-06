@@ -127,6 +127,7 @@ connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int t
         init_openssl();
         if (wrap_socket(sock) < 0) {
             sc_g_log_function("ERR: failed to wrap socket for tls");
+            return NULL;
         }
 
         int connect_res = tls_connect(sock, timeout_ms);
