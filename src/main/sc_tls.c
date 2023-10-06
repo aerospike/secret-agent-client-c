@@ -87,6 +87,7 @@ wrap_socket(sc_socket* sock)
     }
 
     if (!SSL_set_fd(ssl, sock->fd)) {
+		SSL_free(ssl);
 		sc_g_log_function("ERR: unable to set SSL fd");
 		return -1;
 	}

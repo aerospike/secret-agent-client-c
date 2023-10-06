@@ -135,7 +135,7 @@ connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int t
         if (connect_res < 0) {
             sc_g_log_function("ERR: tls connection failed: %d", connect_res);
             close(sock_fd);
-            free(sock);
+            sc_socket_destroy(sock);
             return NULL;
         }
     }
@@ -189,17 +189,29 @@ socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
 }
 
 sc_tls_cfg*
-sc_tls_cfg_init(sc_tls_cfg* cfg) {
+sc_tls_cfg_init(sc_tls_cfg* cfg)
+{
     cfg->ca_string = NULL;
     cfg->enabled = false;
     return cfg;
 }
 
 sc_tls_cfg*
-sc_tls_cfg_new() {
+sc_tls_cfg_new()
+{
     sc_tls_cfg* cfg = (sc_tls_cfg*) malloc(sizeof(sc_tls_cfg));
     sc_tls_cfg_init(cfg);
     return cfg;
+}
+
+void
+sc_socket_destroy(sc_socket* sock)
+{
+    if (sock->ssl != NULL) {
+        SSL_free(sock->ssl);
+    }
+
+    free(sock);
 }
 
 //==========================================================

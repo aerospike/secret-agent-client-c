@@ -90,7 +90,7 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
     char* json_buf = sc_request_secret(sock, res, res_len, key, key_len, cfg->timeout);
 
 	close(sock->fd);
-	free(sock);
+	sc_socket_destroy(sock);
 
 	if (json_buf == NULL) {
 		sc_g_log_function("ERR: empty secret json response");

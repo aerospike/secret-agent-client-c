@@ -25,6 +25,10 @@ typedef struct sc_socket_s {
     sc_tls_cfg* tls_cfg;
 } sc_socket;
 
+// destroys ssl and frees sock, does not close the socket
+// associated with fd or destroy tls_cfg
+void sc_socket_destroy(sc_socket* sock);
+
 sc_socket* connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms);
 
 int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
