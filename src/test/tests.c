@@ -195,6 +195,7 @@ void test_sc_secret_get_bytes_tls()
     cfg.port = port;
     cfg.timeout = 3000;
     cfg.tls.ca_string = cacert;
+    cfg.tls.enabled = true;
 
     sc_client c;
     sc_client_init(&c, &cfg);
