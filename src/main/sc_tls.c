@@ -1,5 +1,5 @@
 /*
- * Copyright 2008-2022 Aerospike, Inc.
+ * Copyright 2008-2023 Aerospike, Inc.
  *
  * Portions may be licensed to Aerospike, Inc. under one or more contributor
  * license agreements.
@@ -35,8 +35,8 @@
 // Globals.
 //
 
-pthread_mutex_t SC_TLS_INIT_MUTEX = PTHREAD_MUTEX_INITIALIZER;
-bool SC_TLS_INITIALIZED = false;
+static pthread_mutex_t SC_TLS_INIT_MUTEX = PTHREAD_MUTEX_INITIALIZER;
+static bool SC_TLS_INITIALIZED = false;
 
 //==========================================================
 // Forward declarations.
@@ -50,7 +50,7 @@ static bool tls_load_ca_str(SSL_CTX* ctx, const char* cert_str);
 //
 
 void
-init_openssl()
+sc_init_openssl()
 {
 	if (SC_TLS_INITIALIZED) {
 		return;
@@ -67,20 +67,23 @@ init_openssl()
 
 // return of < 0 == failure
 int
-wrap_socket(sc_socket* sock)
+sc_wrap_socket(sc_socket* sock)
 {
     SSL_CTX* ctx = create_context();
 	if (ctx == NULL) {
+		sc_g_log_function("ERR: unable to create SSL context");
 		return -1;
 	}
 
 	const char* ca_string = sock->tls_cfg->ca_string;
 	if (ca_string && !tls_load_ca_str(ctx, ca_string)) {
+		SSL_CTX_free(ctx);
 		sc_g_log_function("ERR: unable to load ca certificate from ca_string");
 		return -1;
 	}
 
     SSL* ssl = SSL_new(ctx);
+	SSL_CTX_free(ctx);
     if (ssl == NULL) {
         sc_g_log_function("ERR: unable to create new SSL context");
 		return -1;
@@ -98,7 +101,7 @@ wrap_socket(sc_socket* sock)
 
 // return of < 0 == failure
 int
-tls_connect(sc_socket* sock, int timeout_ms)
+sc_tls_connect(sc_socket* sock, int timeout_ms)
 {
 	int rv;
 
@@ -106,7 +109,6 @@ tls_connect(sc_socket* sock, int timeout_ms)
 		rv = SSL_connect(sock->ssl);
 		if (rv == 1) {
 			// TODO log_session_info(sock);
-			sc_g_log_function("INF: ssl connection succeeded");
 			return 0;
 		}
 
@@ -116,7 +118,7 @@ tls_connect(sc_socket* sock, int timeout_ms)
 		char errbuf[1024];
 		switch (sslerr) {
 		case SSL_ERROR_WANT_READ:
-			rv = socket_wait(sock, timeout_ms, true, &pollres);
+			rv = sc_socket_wait(sock, timeout_ms, true, &pollres);
 			if (rv <= 0) {
 				sc_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
 				return rv;
@@ -124,7 +126,7 @@ tls_connect(sc_socket* sock, int timeout_ms)
 			// loop back around and retry
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			rv = socket_wait(sock, timeout_ms, false, &pollres);
+			rv = sc_socket_wait(sock, timeout_ms, false, &pollres);
 			if (rv <= 0) {
 				sc_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
 				return rv;
@@ -162,7 +164,7 @@ tls_connect(sc_socket* sock, int timeout_ms)
 
 // return of < 0 == failure
 int
-tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
+sc_tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
 {
     size_t bytes_read = 0;
 
@@ -181,7 +183,7 @@ tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
 			char errbuf[1024];
 			switch (sslerr) {
 			case SSL_ERROR_WANT_READ:
-				rv = socket_wait(sock, timeout_ms, true, &pollres);
+				rv = sc_socket_wait(sock, timeout_ms, true, &pollres);
 				if (rv <= 0) {
                     sc_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
 					return rv;
@@ -189,7 +191,7 @@ tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
 				// loop back around and retry
 				break;
 			case SSL_ERROR_WANT_WRITE:
-				rv = socket_wait(sock, timeout_ms, false, &pollres);
+				rv = sc_socket_wait(sock, timeout_ms, false, &pollres);
 				if (rv <= 0) {
                     sc_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
 					return rv;
@@ -228,7 +230,7 @@ tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
 
 // return of < 0 == failure
 int
-tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
+sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 {
 	uint8_t* buf = (uint8_t *) bufp;
 	size_t pos = 0;
@@ -248,7 +250,7 @@ tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 			char errbuf[1024];
 			switch (sslerr) {
 			case SSL_ERROR_WANT_READ:
-				rv = socket_wait(sock, timeout_ms, true, &pollres);
+				rv = sc_socket_wait(sock, timeout_ms, true, &pollres);
 				if (rv <= 0) {
 					sc_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
 					return rv;
@@ -256,7 +258,7 @@ tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 				// loop back around and retry
 				break;
 			case SSL_ERROR_WANT_WRITE:
-				rv = socket_wait(sock, timeout_ms, false, &pollres);
+				rv = sc_socket_wait(sock, timeout_ms, false, &pollres);
 				if (rv <= 0) {
 					sc_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
 					return rv;

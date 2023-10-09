@@ -1,12 +1,18 @@
 /*
- * secrets.c
+ * Copyright 2008-2023 Aerospike, Inc.
  *
- * Copyright (C) 2023 Aerospike, Inc.
+ * Portions may be licensed to Aerospike, Inc. under one or more contributor
+ * license agreements.
  *
- * All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE. THE COPYRIGHT NOTICE ABOVE DOES
- * NOT EVIDENCE ANY ACTUAL OR INTENDED PUBLICATION.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
  */
 
 //==========================================================
@@ -36,18 +42,19 @@
 // Forward Declarations.
 //
 
-int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
-int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
-int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
+static sc_socket* sc_socket_init(sc_socket* sock);
+static int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+static int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+static int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
 
 //==========================================================
 // Public API.
 //
 
-int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+int sc_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
     if (sock->tls_cfg->enabled) {
-        return tls_read_n_bytes(sock, buffer, n, timeout_ms);
+        return sc_tls_read_n_bytes(sock, buffer, n, timeout_ms);
     }
     else {
         return _read_n_bytes(sock, n, buffer, timeout_ms);
@@ -55,10 +62,10 @@ int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 }
 
 // This assumes buffer is at least n bytes long
-int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+int sc_write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
     if (sock->tls_cfg->enabled) {
-        return tls_write(sock, buffer, n, timeout_ms);
+        return sc_tls_write(sock, buffer, n, timeout_ms);
     }
     else {
         int res = _write_n_bytes(sock, n, buffer, timeout_ms);
@@ -70,7 +77,7 @@ int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 }
 
 sc_socket* 
-connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms)
+sc_connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms)
 {
 
     long port_num = strtol(port, NULL, 10);
@@ -120,17 +127,23 @@ connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int t
 
     // wrap the socket, must be freed by caller
     sc_socket* sock = (sc_socket*) malloc(sizeof(sc_socket));
+    if (sock == NULL) {
+        sc_g_log_function("ERR: could not allocate memory for sc_socket");
+        return NULL;
+    }
+
+    sock = sc_socket_init(sock);
     sock->fd = sock_fd;
 
     sock->tls_cfg = tls_cfg;
     if (tls_cfg->enabled) {
-        init_openssl();
-        if (wrap_socket(sock) < 0) {
+        sc_init_openssl();
+        if (sc_wrap_socket(sock) < 0) {
             sc_g_log_function("ERR: failed to wrap socket for tls");
             return NULL;
         }
 
-        int connect_res = tls_connect(sock, timeout_ms);
+        int connect_res = sc_tls_connect(sock, timeout_ms);
 
         if (connect_res < 0) {
             sc_g_log_function("ERR: tls connection failed: %d", connect_res);
@@ -145,7 +158,7 @@ connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int t
 
 // return of <= 0 == failure
 int
-socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
+sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
 {
 	int rv;
     short events = POLLOUT;
@@ -218,6 +231,14 @@ sc_socket_destroy(sc_socket* sock)
 // Private Helpers.
 //
 
+sc_socket* sc_socket_init(sc_socket* sock) {
+    sock->fd = -2; // -2 so we can distinguish from -1 error and valid FDs
+    sock->ssl = NULL;
+    sock->tls_cfg = NULL;
+
+    return sock;
+}
+
 int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
     int bytes_read = 0;
@@ -225,7 +246,7 @@ int _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
     short poll_res = 0;
     while (true)
     {
-        result = socket_wait(sock, timeout_ms, true, &poll_res);
+        result = sc_socket_wait(sock, timeout_ms, true, &poll_res);
         if (result <= 0) {
             sc_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d, errno: %d", result, poll_res, errno);
             return result;
@@ -256,7 +277,7 @@ int _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms
     short poll_res = 0;
     while (true)
     {
-        result = socket_wait(sock, timeout_ms, false, &poll_res);
+        result = sc_socket_wait(sock, timeout_ms, false, &poll_res);
         if (result <= 0) {
             sc_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", result, poll_res, errno);
             return result;

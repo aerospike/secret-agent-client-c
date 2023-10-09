@@ -1,13 +1,20 @@
 /*
- * sc_socket.h
+ * Copyright 2008-2023 Aerospike, Inc.
  *
- * Copyright (C) 2023 Aerospike, Inc.
+ * Portions may be licensed to Aerospike, Inc. under one or more contributor
+ * license agreements.
  *
- * All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE. THE COPYRIGHT NOTICE ABOVE DOES
- * NOT EVIDENCE ANY ACTUAL OR INTENDED PUBLICATION.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
  */
+
 #pragma once
 
 #include <stdbool.h>
@@ -29,15 +36,15 @@ typedef struct sc_socket_s {
 // associated with fd or destroy tls_cfg
 void sc_socket_destroy(sc_socket* sock);
 
-sc_socket* connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms);
+sc_socket* sc_connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms);
 
-int read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+int sc_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 
 // This assumes buffer is at least n bytes long,
-int write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+int sc_write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 
 // return of <= 0 == failure
-int socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res);
+int sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res);
 
 sc_tls_cfg* sc_tls_cfg_init(sc_tls_cfg* cfg);
 
