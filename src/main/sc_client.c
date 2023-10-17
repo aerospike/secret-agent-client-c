@@ -63,10 +63,10 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 	sc_cfg* cfg = c->cfg;
 
 	// path format will be "secrets[:resource_substring]:key"
-	const char* suffix = path + sizeof(SC_SECRETS_PATH_REFIX) - 1;
-	uint32_t suffix_len = (uint32_t)strlen(suffix);
+	const char* secret_request = path + sizeof(SC_SECRETS_PATH_REFIX) - 1;
+	uint32_t secret_request_len = (uint32_t)strlen(secret_request);
 
-	if (suffix_len == 0) {
+	if (secret_request_len == 0) {
 		sc_g_log_function("ERR: empty secret key");
 		err.code = SC_FAILED_BAD_REQUEST;
 		return err;
@@ -74,15 +74,15 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 
 	const char* res = NULL;
 	uint32_t res_len = 0;
-	const char* key = strrchr(suffix, ':');
+	const char* key = strrchr(secret_request, ':');
 
 	if (key == NULL) {
 		// no resource name
-		key = suffix;
+		key = secret_request;
 	}
 	else {
-		res = suffix;
-		res_len = (uint32_t)(key - suffix);
+		res = secret_request;
+		res_len = (uint32_t)(key - secret_request);
 		key++;
 	}
 

@@ -327,6 +327,8 @@ create_context()
 static bool
 tls_load_ca_str(SSL_CTX* ctx, const char* cert_str)
 {
+	// -1 means the buffer is null terminated and length will
+	// be determined using strlen
 	BIO* cert_bio = BIO_new_mem_buf(cert_str, -1);
 
 	if (cert_bio == NULL) {
