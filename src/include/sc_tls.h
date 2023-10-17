@@ -17,18 +17,33 @@
 
 #pragma once
 
+#include "sc_error.h"
 #include "sc_socket.h"
 
 void sc_init_openssl();
 
-// return of < 0 == failure
+/*
+ * sc_wrap_socket creates an SSL context
+ * for the sc_socket
+ * SUCCESS: 0 is returned.
+ * FAILURE: A value other than 0 is returned.
+*/
 int sc_wrap_socket(sc_socket* sock);
 
-// return of < 0 == failure
-int sc_tls_connect(sc_socket* sock, int timeout_ms);
+/*
+ * sc_tls_connect attempts to perform a tls
+ * connection over sock for timeout_ms milliseconds.
+*/
+sc_err sc_tls_connect(sc_socket* sock, int timeout_ms);
 
-// return of < 0 == failure
-int sc_tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms);
+/*
+ * sc_tls_read_n_bytes reads n bytes from
+ * tls connected socket.
+*/
+sc_err sc_tls_read_n_bytes(sc_socket* sock, size_t len, void* buf, int timeout_ms);
 
-// return of < 0 == failure
-int sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms);
+/*
+ * sc_tls_write_n_bytes reads n bytes from
+ * tls connected socket.
+*/
+sc_err sc_tls_write_n_bytes(sc_socket* sock, size_t len, void* buf, int timeout_ms);

@@ -18,12 +18,14 @@
 #pragma once
 
 enum sc_error_code {
-    SC_OK,
-    SC_FAILED_REQUEST,
-    SC_FAILED_INTERNAL,
+	SC_OK,
+	SC_FAILED_BAD_REQUEST,
+	SC_FAILED_BAD_CONFIG,
+	SC_FAILED_INTERNAL,
+	SC_FAILED_TIMEOUT
 };
 
 typedef struct sc_error_s
 {
-    enum sc_error_code code;
+	enum sc_error_code code;
 } sc_err;

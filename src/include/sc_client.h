@@ -74,6 +74,7 @@ sc_client_new(sc_cfg* cfg);
  * c should be a pointer to an initialised sc_client.
  * path is the secret path, the format is, "secrets:<resource_key>:<secret_key>".
  * r is a result parameter, which is filled in with the secret value.
+ * On success, r is heap allocated. The caller is responsible for freeing r.
  * size_r is a result parameter, which is filled in with the size of the secret value.
  * Return value is an sc_err, set to SC_OK on success and any other value on failure.
 */

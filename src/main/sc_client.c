@@ -57,8 +57,10 @@ sc_client_new(sc_cfg* cfg) {
 
 sc_err
 sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* size_r) {
-	sc_err err = { 0 };
-    sc_cfg* cfg = c->cfg;
+	sc_err err;
+	err.code = SC_OK;
+
+	sc_cfg* cfg = c->cfg;
 
 	// path format will be "secrets[:resource_substring]:key"
 	const char* suffix = path + sizeof(SC_SECRETS_PATH_REFIX) - 1;
@@ -66,7 +68,7 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 
 	if (suffix_len == 0) {
 		sc_g_log_function("ERR: empty secret key");
-		err.code = SC_FAILED_INTERNAL;
+		err.code = SC_FAILED_BAD_REQUEST;
 		return err;
 	}
 
@@ -84,23 +86,22 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 		key++;
 	}
 
-    sc_socket* sock = sc_connect_addr_port(cfg->addr, cfg->port, &cfg->tls, cfg->timeout);
-
-	if (sock == NULL) {
+	sc_socket* sock = NULL;
+	err = sc_connect_addr_port(&sock, cfg->addr, cfg->port, &cfg->tls, cfg->timeout);
+	if (err.code != SC_OK) {
 		sc_g_log_function("ERR: failed to create socket");
-		err.code = SC_FAILED_INTERNAL;
 		return err;
 	}
 
 	uint32_t key_len = (uint32_t)strlen(key);
-    char* json_buf = sc_request_secret(sock, res, res_len, key, key_len, cfg->timeout);
+	char* json_buf = NULL;
+	err = sc_request_secret(&json_buf, sock, res, res_len, key, key_len, cfg->timeout);
 
 	close(sock->fd);
 	sc_socket_destroy(sock);
 
-	if (json_buf == NULL) {
+	if (err.code != SC_OK) {
 		sc_g_log_function("ERR: empty secret json response");
-		err.code = SC_FAILED_REQUEST;
 		return err;
 	}
 
@@ -109,7 +110,7 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 
 	if (buf == NULL) {
 		sc_g_log_function("ERR: unable to fetch secret");
-		err.code = SC_FAILED_REQUEST;
+		err.code = SC_FAILED_BAD_REQUEST;
 		return err;
 	}
 

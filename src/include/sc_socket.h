@@ -17,34 +17,40 @@
 
 #pragma once
 
+#include "sc_error.h"
+
 #include <stdbool.h>
 
 #include <openssl/ssl.h>
 
 typedef struct sc_tls_cfg_s {
-    char* ca_string;
-    bool enabled;
+	char* ca_string;
+	bool enabled;
 } sc_tls_cfg;
 
 typedef struct sc_socket_s {
-    int fd;
-    SSL* ssl;
-    sc_tls_cfg* tls_cfg;
+	int fd;
+	SSL* ssl;
+	sc_tls_cfg* tls_cfg;
 } sc_socket;
 
 // destroys ssl and frees sock, does not close the socket
 // associated with fd or destroy tls_cfg
 void sc_socket_destroy(sc_socket* sock);
 
-sc_socket* sc_connect_addr_port(const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms);
+sc_err sc_connect_addr_port(sc_socket** sockp, const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms);
 
-int sc_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+// This assumes buffer is at least n bytes long.
+sc_err sc_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 
-// This assumes buffer is at least n bytes long,
-int sc_write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+// This assumes buffer is at least n bytes long.
+sc_err sc_write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 
-// return of <= 0 == failure
-int sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res);
+/*
+ * sc_socket_wait waits for a socket to be
+ * ready to read or write.
+*/
+sc_err sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res);
 
 sc_tls_cfg* sc_tls_cfg_init(sc_tls_cfg* cfg);
 

@@ -20,6 +20,7 @@
 //
 
 #include "sc_b64.h"
+#include "sc_error.h"
 #include "sc_secrets.h"
 #include "sc_socket.h"
 #include "sc_logging.h"
@@ -58,20 +59,23 @@ static const char TRAILING_WHITESPACE[] = " \t\n\r\f\v";
 // Public API.
 //
 
-char*
-sc_request_secret(sc_socket* sock, const char* rsrc_sub, uint32_t rsrc_sub_len,
+sc_err
+sc_request_secret(char** resp, sc_socket* sock, const char* rsrc_substr, uint32_t rsrc_substr_len,
 		const char* secret_key, uint32_t secret_key_len, int timeout_ms)
 {
-	char req[100 + rsrc_sub_len + secret_key_len];
+	sc_err err;
+	err.code = SC_OK;
+
+	char req[100 + rsrc_substr_len + secret_key_len];
 	char* json = &req[SC_HEADER_SIZE]; // json starts after 8 byte header
 
-	if (rsrc_sub_len == 0) {
+	if (rsrc_substr_len == 0) {
 		sprintf(json, "{\"SecretKey\":\"%.*s\"}", secret_key_len, secret_key);
 	}
 	else {
 		sprintf(json,
 				"{\"Resource\":\"%.*s\",\"SecretKey\":\"%.*s\"}",
-				rsrc_sub_len, rsrc_sub, secret_key_len, secret_key);
+				rsrc_substr_len, rsrc_substr, secret_key_len, secret_key);
 	}
 
 	uint32_t json_sz = (uint32_t)strlen(json);
@@ -81,42 +85,48 @@ sc_request_secret(sc_socket* sock, const char* rsrc_sub, uint32_t rsrc_sub_len,
 	*(uint32_t*)&req[0] = ntohl(SC_MAGIC);
 	*(uint32_t*)&req[4] = ntohl(json_sz);
 
-	if (sc_write_n_bytes(sock, SC_HEADER_SIZE + json_sz, req, timeout_ms) <= 0) {
+	err = sc_write_n_bytes(sock, SC_HEADER_SIZE + json_sz, req, timeout_ms);
+	if (err.code != SC_OK) {
 		sc_g_log_function("ERR: failed asking for secret - %s", req);
-		return NULL;
+		return err;
 	}
 
 	char header[SC_HEADER_SIZE];
 
-	if (sc_read_n_bytes(sock, SC_HEADER_SIZE, header, timeout_ms) <= 0) {
-		sc_g_log_function("ERR: failed reading secret header errno: %d", errno);
-		return NULL;
+	err = sc_read_n_bytes(sock, SC_HEADER_SIZE, header, timeout_ms);
+	if (err.code != SC_OK) {
+		sc_g_log_function("ERR: failed reading secret header, errno: %d", errno);
+		return err;
 	}
 
 	uint32_t recv_magic = ntohl(*(uint32_t*)&header[0]);
 
 	if (recv_magic != SC_MAGIC) {
 		sc_g_log_function("ERR: bad magic - %x", recv_magic);
-		return NULL;
+		err.code = SC_FAILED_INTERNAL;
+		return err;
 	}
 
 	uint32_t recv_json_sz = ntohl(*(uint32_t*)&header[4]);
 
 	if (recv_json_sz > SC_MAX_RECV_JSON_SIZE) {
 		sc_g_log_function("ERR: response too big - %d", recv_json_sz);
-		return NULL;
+		err.code = SC_FAILED_INTERNAL;
+		return err;
 	}
 
 	char *recv_json = malloc(recv_json_sz + 1);
 
-	if (sc_read_n_bytes(sock, recv_json_sz, recv_json, timeout_ms) <= 0) {
+	err = sc_read_n_bytes(sock, recv_json_sz, recv_json, timeout_ms);
+	if (err.code != SC_OK) {
 		sc_g_log_function("ERR: failed reading secret errno: %d", errno);
-		return NULL;
+		return err;
 	}
 
 	recv_json[recv_json_sz] = '\0';
+	*resp = recv_json;
 
-	return recv_json;
+	return err;
 }
 
 uint8_t*

@@ -65,7 +65,7 @@ Main.
     assert(err.code == SC_OK);
 
     // null terminate the secret for use as a string
-    secret[result_size-1] = 0;
+    secret[result_size] = 0;
     printf("secret: %s\n", (char*)secret);
     free(secret);
 ```
@@ -101,7 +101,7 @@ Request a secret over TCP with TLS and logging.
     assert(err.code == SC_OK);
 
     // null terminate the secret for use as a string
-    secret[result_size-1] = 0;
+    secret[result_size] = 0;
     printf("secret: %s\n", (char*)secret);
     free(secret);
 ```

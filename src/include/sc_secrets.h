@@ -17,12 +17,11 @@
 
 #pragma once
 
+#include "sc_error.h"
 #include "sc_socket.h"
 
 #include <stdint.h>
 
-uint8_t*
-sc_parse_json(const char* json_buf, size_t* size_r);
+uint8_t* sc_parse_json(const char* json_buf, size_t* size_r);
 
-char*
-sc_request_secret(sc_socket* sock, const char* rsrc_sub, uint32_t rsrc_sub_len, const char* secret_key, uint32_t secret_key_len, int timeout_ms);
+sc_err sc_request_secret(char** resp, sc_socket* sock, const char* rsrc_sub, uint32_t rsrc_sub_len, const char* secret_key, uint32_t secret_key_len, int timeout_ms);

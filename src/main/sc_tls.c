@@ -15,6 +15,7 @@
  * the License.
  */
 
+#include "sc_error.h"
 #include "sc_socket.h"
 #include "sc_logging.h"
 
@@ -65,11 +66,10 @@ sc_init_openssl()
 	pthread_mutex_unlock(&SC_TLS_INIT_MUTEX);
 }
 
-// return of < 0 == failure
 int
 sc_wrap_socket(sc_socket* sock)
 {
-    SSL_CTX* ctx = create_context();
+	SSL_CTX* ctx = create_context();
 	if (ctx == NULL) {
 		sc_g_log_function("ERR: unable to create SSL context");
 		return -1;
@@ -82,34 +82,35 @@ sc_wrap_socket(sc_socket* sock)
 		return -1;
 	}
 
-    SSL* ssl = SSL_new(ctx);
+	SSL* ssl = SSL_new(ctx);
 	SSL_CTX_free(ctx);
-    if (ssl == NULL) {
-        sc_g_log_function("ERR: unable to create new SSL context");
+	if (ssl == NULL) {
+		sc_g_log_function("ERR: unable to create new SSL context");
 		return -1;
-    }
+	}
 
-    if (!SSL_set_fd(ssl, sock->fd)) {
+	if (!SSL_set_fd(ssl, sock->fd)) {
 		SSL_free(ssl);
 		sc_g_log_function("ERR: unable to set SSL fd");
 		return -1;
 	}
 
-    sock->ssl = ssl;
+	sock->ssl = ssl;
 	return 0;
 }
 
-// return of < 0 == failure
-int
+sc_err
 sc_tls_connect(sc_socket* sock, int timeout_ms)
 {
+	sc_err err;
 	int rv;
 
 	while (true) {
+		err.code = SC_OK;
 		rv = SSL_connect(sock->ssl);
 		if (rv == 1) {
 			// TODO log_session_info(sock);
-			return 0;
+			return err;
 		}
 
 		int sslerr = SSL_get_error(sock->ssl, rv);
@@ -118,18 +119,18 @@ sc_tls_connect(sc_socket* sock, int timeout_ms)
 		char errbuf[1024];
 		switch (sslerr) {
 		case SSL_ERROR_WANT_READ:
-			rv = sc_socket_wait(sock, timeout_ms, true, &pollres);
-			if (rv <= 0) {
-				sc_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
-				return rv;
+			err = sc_socket_wait(sock, timeout_ms, true, &pollres);
+			if (err.code != SC_OK) {
+				sc_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+				return err;
 			}
 			// loop back around and retry
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			rv = sc_socket_wait(sock, timeout_ms, false, &pollres);
-			if (rv <= 0) {
-				sc_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
-				return rv;
+			err = sc_socket_wait(sock, timeout_ms, false, &pollres);
+			if (err.code != SC_OK) {
+				sc_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+				return err;
 			}
 			// loop back around and retry
 			break;
@@ -138,7 +139,8 @@ sc_tls_connect(sc_socket* sock, int timeout_ms)
 			errcode = ERR_get_error();
 			ERR_error_string_n(errcode, errbuf, sizeof(errbuf));
 			sc_g_log_function("ERR: SSL_connect failed: %s", errbuf);
-			return -1;
+			err.code = SC_FAILED_INTERNAL;
+			return err;
 		case SSL_ERROR_SYSCALL:
 			errcode = ERR_get_error();
 			if (errcode != 0) {
@@ -153,48 +155,51 @@ sc_tls_connect(sc_socket* sock, int timeout_ms)
 					sc_g_log_function("ERR: SSL_connect I/O error: %d", errno);
 				}
 			}
-			return -2;
+			err.code = SC_FAILED_INTERNAL;
+			return err;
 		default:
 			sc_g_log_function("ERR: SSL_connect: unexpected ssl error: %d", sslerr);
-			return -3;
+			err.code = SC_FAILED_INTERNAL;
+			return err;
 			break;
 		}
 	}
 }
 
-// return of < 0 == failure
-int
-sc_tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
+sc_err
+sc_tls_read_n_bytes(sc_socket* sock, size_t n, void* buf, int timeout_ms)
 {
-    size_t bytes_read = 0;
+	sc_err err;
+	size_t bytes_read = 0;
 
-    while (true) {
-        int rv = SSL_read(sock->ssl, buf + bytes_read, (int)(len - bytes_read));
+	while (true) {
+		err.code = SC_OK;
+		int rv = SSL_read(sock->ssl, buf + bytes_read, (int)(n - bytes_read));
 		if (rv > 0) {
 			bytes_read += rv;
-			if (bytes_read >= len) {
-				return bytes_read;
+			if (bytes_read >= n) {
+				return err;
 			}
 		}
 		else {
-            int sslerr = SSL_get_error(sock->ssl, rv);
-            short pollres = 0;
+			int sslerr = SSL_get_error(sock->ssl, rv);
+			short pollres = 0;
 			unsigned long errcode;
 			char errbuf[1024];
 			switch (sslerr) {
 			case SSL_ERROR_WANT_READ:
-				rv = sc_socket_wait(sock, timeout_ms, true, &pollres);
-				if (rv <= 0) {
-                    sc_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
-					return rv;
+				err = sc_socket_wait(sock, timeout_ms, true, &pollres);
+				if (err.code != SC_OK) {
+					sc_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					return err;
 				}
 				// loop back around and retry
 				break;
 			case SSL_ERROR_WANT_WRITE:
-				rv = sc_socket_wait(sock, timeout_ms, false, &pollres);
-				if (rv <= 0) {
-                    sc_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
-					return rv;
+				err = sc_socket_wait(sock, timeout_ms, false, &pollres);
+				if (err.code != SC_OK) {
+					sc_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					return err;
 				}
 				// loop back around and retry
 				break;
@@ -203,7 +208,8 @@ sc_tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
 				errcode = ERR_get_error();
 				ERR_error_string_n(errcode, errbuf, sizeof(errbuf));
 				sc_g_log_function("ERR: SSL_read failed: %s", errbuf);
-				return -1;
+				err.code = SC_FAILED_INTERNAL;
+				return err;
 			case SSL_ERROR_SYSCALL:
 				errcode = ERR_get_error();
 				if (errcode != 0) {
@@ -218,29 +224,30 @@ sc_tls_read_n_bytes(sc_socket* sock, void* buf, size_t len, int timeout_ms)
 						sc_g_log_function("ERR: SSL_read I/O error: %d", errno);
 					}
 				}
-				return -1;
+				err.code = SC_FAILED_INTERNAL;
+				return err;
 			default:
 				sc_g_log_function("ERR: SSL_read: unexpected ssl error: %d", sslerr);
-				return -1;
-				break;
+				err.code = SC_FAILED_INTERNAL;
+				return err;
 			}
-        }
-    }
+		}
+	}
 }
 
-// return of < 0 == failure
-int
-sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
+sc_err
+sc_tls_write_n_bytes(sc_socket* sock, size_t n, void* buf, int timeout_ms)
 {
-	uint8_t* buf = (uint8_t *) bufp;
+	sc_err err;
 	size_t pos = 0;
 
 	while (true) {
-		int rv = SSL_write(sock->ssl, buf + pos, (int)(len - pos));
+		err.code = SC_OK;
+		int rv = SSL_write(sock->ssl, buf + pos, (int)(n - pos));
 		if (rv > 0) {
 			pos += rv;
-			if (pos >= len) {
-				return pos;
+			if (pos >= n) {
+				return err;
 			}
 		}
 		else {
@@ -250,18 +257,18 @@ sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 			char errbuf[1024];
 			switch (sslerr) {
 			case SSL_ERROR_WANT_READ:
-				rv = sc_socket_wait(sock, timeout_ms, true, &pollres);
-				if (rv <= 0) {
-					sc_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
-					return rv;
+				err = sc_socket_wait(sock, timeout_ms, true, &pollres);
+				if (err.code != SC_OK) {
+					sc_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					return err;
 				}
 				// loop back around and retry
 				break;
 			case SSL_ERROR_WANT_WRITE:
-				rv = sc_socket_wait(sock, timeout_ms, false, &pollres);
-				if (rv <= 0) {
-					sc_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", rv, pollres, errno);
-					return rv;
+				err = sc_socket_wait(sock, timeout_ms, false, &pollres);
+				if (err.code != SC_OK) {
+					sc_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					return err;
 				}
 				// loop back around and retry
 				break;
@@ -270,7 +277,8 @@ sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 				errcode = ERR_get_error();
 				ERR_error_string_n(errcode, errbuf, sizeof(errbuf));
 				sc_g_log_function("ERR: SSL_write failed: %s", errbuf);
-				return -1;
+				err.code = SC_FAILED_INTERNAL;
+				return err;
 			case SSL_ERROR_SYSCALL:
 				errcode = ERR_get_error();
 				if (errcode != 0) {
@@ -285,11 +293,12 @@ sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 						sc_g_log_function("ERR: SSL_write I/O error: %d", errno);
 					}
 				}
-				return -1;
+				err.code = SC_FAILED_INTERNAL;
+				return err;
 			default:
 				sc_g_log_function("ERR: SSL_write: unexpected ssl error: %d", sslerr);
-				return -1;
-				break;
+				err.code = SC_FAILED_INTERNAL;
+				return err;
 			}
 		}
 	}
@@ -302,17 +311,17 @@ sc_tls_write(sc_socket* sock, void* bufp, size_t len, int timeout_ms)
 static SSL_CTX*
 create_context()
 {
-    const SSL_METHOD* method;
-    SSL_CTX *ctx;
+	const SSL_METHOD* method;
+	SSL_CTX *ctx;
 
-    method = TLS_client_method();
+	method = TLS_client_method();
 
-    ctx = SSL_CTX_new(method);
-    if (!ctx) {
-        sc_g_log_function("unable to create SSL context");
-    }
+	ctx = SSL_CTX_new(method);
+	if (!ctx) {
+		sc_g_log_function("unable to create SSL context");
+	}
 
-    return ctx;
+	return ctx;
 }
 
 static bool
