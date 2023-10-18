@@ -15,12 +15,27 @@
  * the License.
  */
 
-#pragma once
+//==========================================================
+// Includes.
+//
 
-typedef void sc_log_func(const char* format, ...);
+#include "sa_logging.h"
 
-extern sc_log_func* sc_g_log_function;
+//==========================================================
+// Globals.
+//
 
-void sc_set_log_function(sc_log_func* f);
+sa_log_func* sa_g_log_function = sa_default_logger;
 
-void sc_default_logger(const char* format, ...);
+//==========================================================
+// Public API.
+//
+
+void
+sa_set_log_function(sa_log_func* f)
+{
+	sa_g_log_function = f;
+}
+
+void 
+sa_default_logger(const char* format, ...) {}

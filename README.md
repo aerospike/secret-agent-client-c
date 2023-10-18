@@ -1,6 +1,6 @@
 # Secrets Client C
 
-The secrets-client-c library is a C client for the [Aerospike Secret Agent](https://docs.aerospike.com/tools/secret-agent).
+The secret-agent-client-c library is a C client for the [Aerospike Secret Agent](https://docs.aerospike.com/tools/secret-agent).
 It is used to request secrets from the secret agent.
 
 ## Building
@@ -13,17 +13,17 @@ This client is built using make. Clone this repo, cd into it, and run `make`
 Shared and static libraries will be output in target/<platform>/lib
 
 ## Usage
-Make use of the secret client through the APIs exposed in sc_client.h.
+Make use of the secret client through the APIs exposed in sa_client.h.
 
-Start by creating and configuring a secret agent client, `sc_client` using `sc_client_init()` or `sc_client_new()`.
+Start by creating and configuring a secret agent client, `sa_client` using `sa_client_init()` or `sa_client_new()`.
 
-Request secrets using `sc_secret_get_bytes()`.
+Request secrets using `sa_secret_get_bytes()`.
 
 **_NOTE:_**  Returned secrets always have an extra byte added to the end in case they are strings
-and the  caller needs to null terminate them. Secrets are not automatically null terminated.
+and the caller needs to null terminate them. Secrets are not automatically null terminated.
 
 Logging is disabled by default but can be enabled by passing a
-pointer to a function of type `log_func` to the `sc_set_log_function` function.
+pointer to a function of type `sa_log_func` to the `sa_set_log_function` function.
 
 ## Examples
 Request a secret over TCP with logging.
@@ -45,24 +45,24 @@ Main.
     const char* addr = "127.0.0.1";
     const char* port = "3005";
 
-    sc_cfg cfg;
-    sc_cfg_init(&cfg);
+    sa_cfg cfg;
+    sa_cfg_init(&cfg);
     cfg.addr = addr;
     cfg.port = port;
     cfg.timeout = 2000;
 
-    sc_client c;
-    sc_client_init(&c, &cfg);
+    sa_client c;
+    sa_client_init(&c, &cfg);
 
-    sc_set_log_function(&mylog);
+    sa_set_log_function(&mylog);
 
     const char* path = "secrets:<resource_key>:<secret_key>";
     size_t result_size = 0;
 
     uint8_t* secret;
-    sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+    sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
     
-    assert(err.code == SC_OK);
+    assert(err.code == SA_OK);
 
     // null terminate the secret for use as a string
     secret[result_size] = 0;
@@ -80,25 +80,25 @@ Request a secret over TCP with TLS and logging.
     // read_cert_file reads out the entire cert file
     cacert = read_cert_file(capath);
 
-    sc_cfg cfg;
-    sc_cfg_init(&cfg);
+    sa_cfg cfg;
+    sa_cfg_init(&cfg);
     cfg.addr = addr;
     cfg.port = port;
     cfg.timeout = 3000;
     cfg.tls.ca_string = cacert;
 
-    sc_client c;
-    sc_client_init(&c, &cfg);
+    sa_client c;
+    sa_client_init(&c, &cfg);
 
-    sc_set_log_function(&mylog);
+    sa_set_log_function(&mylog);
 
     const char* path = "secrets:<resource_key>:<secret_key>";
     size_t result_size = 0;
 
     uint8_t* secret;
-    sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+    sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
     
-    assert(err.code == SC_OK);
+    assert(err.code == SA_OK);
 
     // null terminate the secret for use as a string
     secret[result_size] = 0;

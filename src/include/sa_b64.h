@@ -28,24 +28,24 @@
 // multiple of 4 bytes. Note that the length returned here does NOT include an
 // extra byte for making a null-terminated string.
 static inline uint32_t
-sc_b64_encoded_len(uint32_t in_size)
+sa_b64_encoded_len(uint32_t in_size)
 {
 	return ((in_size + 2) / 3) << 2;
 }
 
-void sc_b64_encode(const uint8_t* in, uint32_t in_size, char* out);
+void sa_b64_encode(const uint8_t* in, uint32_t in_size, char* out);
 
 // The size returned here is the minimum required for an 'out' buffer passed in
 // a decode method. Caller must ensure 'in_len' is a multiple of 4 bytes.
 static inline uint32_t
-sc_b64_decoded_buf_size(uint32_t in_len)
+sa_b64_decoded_buf_size(uint32_t in_len)
 {
 	return (in_len * 3) >> 2;
 }
 
-void sc_b64_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size);
-void sc_b64_decode_in_place(uint8_t* in_out, uint32_t in_len, uint32_t* out_size);
-bool sc_b64_validate_and_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size);
-bool sc_b64_validate_and_decode_in_place(uint8_t* in_out, uint32_t in_len, uint32_t* out_size);
+void sa_b64_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size);
+void sa_b64_decode_in_place(uint8_t* in_out, uint32_t in_len, uint32_t* out_size);
+bool sa_b64_validate_and_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size);
+bool sa_b64_validate_and_decode_in_place(uint8_t* in_out, uint32_t in_len, uint32_t* out_size);
 
 /******************************************************************************/

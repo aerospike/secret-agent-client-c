@@ -17,15 +17,11 @@
 
 #pragma once
 
-enum sc_error_code {
-	SC_OK,
-	SC_FAILED_BAD_REQUEST,
-	SC_FAILED_BAD_CONFIG,
-	SC_FAILED_INTERNAL,
-	SC_FAILED_TIMEOUT
-};
+#include "sa_error.h"
+#include "sa_socket.h"
 
-typedef struct sc_error_s
-{
-	enum sc_error_code code;
-} sc_err;
+#include <stdint.h>
+
+uint8_t* sa_parse_json(const char* json_buf, size_t* size_r);
+
+sa_err sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_sub, uint32_t rsrc_sub_len, const char* secret_key, uint32_t secret_key_len, int timeout_ms);

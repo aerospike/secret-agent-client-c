@@ -14,7 +14,7 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-#include "sc_b64.h"
+#include "sa_b64.h"
 
 /******************************************************************************
  * CONSTANTS
@@ -78,9 +78,9 @@ static const uint8_t base64_decode_a[] = {
  * FUNCTIONS
  ******************************************************************************/
 
-// Must have allocated big enough 'out' - e.g. use sc_b64_encoded_len(in_size).
+// Must have allocated big enough 'out' - e.g. use sa_b64_encoded_len(in_size).
 void
-sc_b64_encode(const uint8_t* in, uint32_t in_size, char* out)
+sa_b64_encode(const uint8_t* in, uint32_t in_size, char* out)
 {
 	int i = 0;
 	int j = 0;
@@ -120,13 +120,13 @@ sc_b64_encode(const uint8_t* in, uint32_t in_size, char* out)
 	}
 }
 
-// Must have allocated big enough 'out' - e.g. use sc_b64_decoded_buf_size().
+// Must have allocated big enough 'out' - e.g. use sa_b64_decoded_buf_size().
 // Note that 'in_len' must be a padded encoded size - an exact multiple of 4.
 // 'out_size' returns the decoded size after padding has been accounted for -
 // i.e. it may be 1 or 2 less than the 'out' buffer size. Also, 'in_len' = 0 is
 // handled, and gives 'out_size' = 0.
 void
-sc_b64_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size)
+sa_b64_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size)
 {
 	uint32_t i = 0;
 	uint32_t j = 0;
@@ -160,9 +160,9 @@ sc_b64_decode(const char* in, uint32_t in_len, uint8_t* out, uint32_t* out_size)
 	}
 }
 
-// Same as sc_b64_decode() but 'in' and 'out' are the same buffer.
+// Same as sa_b64_decode() but 'in' and 'out' are the same buffer.
 void
-sc_b64_decode_in_place(uint8_t* in_out, uint32_t in_len, uint32_t* out_size)
+sa_b64_decode_in_place(uint8_t* in_out, uint32_t in_len, uint32_t* out_size)
 {
 	uint32_t i = 0;
 	uint32_t j = 0;
@@ -232,30 +232,30 @@ is_valid_encoded(const char* in, uint32_t in_len)
 	return *read == '=' || VA[*read];
 }
 
-// Same as sc_b64_decode() but validates input as ok to decode.
+// Same as sa_b64_decode() but validates input as ok to decode.
 bool
-sc_b64_validate_and_decode(const char* in, uint32_t in_len, uint8_t* out,
+sa_b64_validate_and_decode(const char* in, uint32_t in_len, uint8_t* out,
 		uint32_t* out_size)
 {
 	if (! is_valid_encoded(in, in_len)) {
 		return false;
 	}
 
-	sc_b64_decode(in, in_len, out, out_size);
+	sa_b64_decode(in, in_len, out, out_size);
 
 	return true;
 }
 
-// Same as sc_b64_decode_in_place() but validates input as ok to decode.
+// Same as sa_b64_decode_in_place() but validates input as ok to decode.
 bool
-sc_b64_validate_and_decode_in_place(uint8_t* in_out, uint32_t in_len,
+sa_b64_validate_and_decode_in_place(uint8_t* in_out, uint32_t in_len,
 		uint32_t* out_size)
 {
 	if (! is_valid_encoded((const char*)in_out, in_len)) {
 		return false;
 	}
 
-	sc_b64_decode_in_place(in_out, in_len, out_size);
+	sa_b64_decode_in_place(in_out, in_len, out_size);
 
 	return true;
 }

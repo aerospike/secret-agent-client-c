@@ -15,8 +15,8 @@
  * the License.
  */
 
-#include "sc_client.h"
-#include "sc_logging.h"
+#include "sa_client.h"
+#include "sa_logging.h"
 
 #include <assert.h>
 #include <stddef.h>
@@ -61,31 +61,31 @@ char* readCertFile(const char* path)
 	return buff;
 }
 
-void test_sc_secret_get_bytes()
+void test_sa_secret_get_bytes()
 {
 	const char* expected = "127.0.0.1";
 
 	char* addr = AGENT_ADDR;
 	char* port = AGENT_PORT;
 
-	sc_cfg cfg;
-	sc_cfg_init(&cfg);
+	sa_cfg cfg;
+	sa_cfg_init(&cfg);
 	cfg.addr = addr;
 	cfg.port = port;
 	cfg.timeout = 2000;
 
-	sc_client c;
-	sc_client_init(&c, &cfg);
+	sa_client c;
+	sa_client_init(&c, &cfg);
 
-	sc_set_log_function(&mylog);
+	sa_set_log_function(&mylog);
 
 	const char* path = "secrets:pass:pass";
 	size_t result_size = 0;
 
 	uint8_t* secret;
-	sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+	sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
 	
-	assert(err.code == SC_OK);
+	assert(err.code == SA_OK);
 
 	secret[result_size] = 0;
 	assert(!strcmp(expected, (char*)secret));
@@ -93,111 +93,111 @@ void test_sc_secret_get_bytes()
 	free(secret);
 }
 
-void test_sc_secret_get_bytes_bad_address()
+void test_sa_secret_get_bytes_bad_address()
 {
 	// bad ip
 	char* addr = "256.0.0.0";
 	char* port = AGENT_PORT;
 
-	sc_cfg cfg;
-	sc_cfg_init(&cfg);
+	sa_cfg cfg;
+	sa_cfg_init(&cfg);
 	cfg.addr = addr;
 	cfg.port = port;
 	cfg.timeout = 2000;
 
-	sc_client c;
-	sc_client_init(&c, &cfg);
+	sa_client c;
+	sa_client_init(&c, &cfg);
 
-	sc_set_log_function(&mylog);
+	sa_set_log_function(&mylog);
 
 	const char* path = "secrets:pass:pass";
 	size_t result_size = 0;
 
 	uint8_t* secret;
-	sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+	sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
 	
-	assert(err.code == SC_FAILED_BAD_CONFIG);
+	assert(err.code == SA_FAILED_BAD_CONFIG);
 }
 
-void test_sc_secret_get_bytes_bad_port()
+void test_sa_secret_get_bytes_bad_port()
 {
 	char* addr = AGENT_ADDR;
 	// bad port
 	char* port = "0";
 
-	sc_cfg cfg;
-	sc_cfg_init(&cfg);
+	sa_cfg cfg;
+	sa_cfg_init(&cfg);
 	cfg.addr = addr;
 	cfg.port = port;
 	cfg.timeout = 2000;
 
-	sc_client c;
-	sc_client_init(&c, &cfg);
+	sa_client c;
+	sa_client_init(&c, &cfg);
 
-	sc_set_log_function(&mylog);
+	sa_set_log_function(&mylog);
 
 	const char* path = "secrets:pass:pass";
 	size_t result_size = 0;
 
 	uint8_t* secret;
-	sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+	sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
 	
-	assert(err.code == SC_FAILED_BAD_CONFIG);
+	assert(err.code == SA_FAILED_BAD_CONFIG);
 }
 
-void test_sc_secret_get_bytes_bad_secret()
+void test_sa_secret_get_bytes_bad_secret()
 {
 	char* addr = AGENT_ADDR;
 	// bad port
 	char* port = AGENT_PORT;
 
-	sc_cfg cfg;
-	sc_cfg_init(&cfg);
+	sa_cfg cfg;
+	sa_cfg_init(&cfg);
 	cfg.addr = addr;
 	cfg.port = port;
 	cfg.timeout = 1000;
 
-	sc_client c;
-	sc_client_init(&c, &cfg);
+	sa_client c;
+	sa_client_init(&c, &cfg);
 
-	sc_set_log_function(&mylog);
+	sa_set_log_function(&mylog);
 
 	const char* path = "secrets:pass:fakesecret";
 	size_t result_size = 0;
 
 	uint8_t* secret;
-	sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+	sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
 	
-	assert(err.code == SC_FAILED_BAD_REQUEST);
+	assert(err.code == SA_FAILED_BAD_REQUEST);
 }
 
-void test_sc_secret_get_bytes_missing_resource_name()
+void test_sa_secret_get_bytes_missing_resource_name()
 {
 	char* addr = AGENT_ADDR;
 	// bad port
 	char* port = AGENT_PORT;
 
-	sc_cfg cfg;
-	sc_cfg_init(&cfg);
+	sa_cfg cfg;
+	sa_cfg_init(&cfg);
 	cfg.addr = addr;
 	cfg.port = port;
 	cfg.timeout = 1000;
 
-	sc_client c;
-	sc_client_init(&c, &cfg);
+	sa_client c;
+	sa_client_init(&c, &cfg);
 
-	sc_set_log_function(&mylog);
+	sa_set_log_function(&mylog);
 
 	const char* path = "secrets:pass";
 	size_t result_size = 0;
 
 	uint8_t* secret;
-	sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+	sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
 	
-	assert(err.code == SC_FAILED_BAD_REQUEST);
+	assert(err.code == SA_FAILED_BAD_REQUEST);
 }
 
-void test_sc_secret_get_bytes_tls()
+void test_sa_secret_get_bytes_tls()
 {
 	const char* expected = "127.0.0.1";
 
@@ -208,26 +208,26 @@ void test_sc_secret_get_bytes_tls()
 	char* cacert = NULL;
 	cacert = readCertFile(capath);
 
-	sc_cfg cfg;
-	sc_cfg_init(&cfg);
+	sa_cfg cfg;
+	sa_cfg_init(&cfg);
 	cfg.addr = addr;
 	cfg.port = port;
 	cfg.timeout = 3000;
 	cfg.tls.ca_string = cacert;
 	cfg.tls.enabled = true;
 
-	sc_client c;
-	sc_client_init(&c, &cfg);
+	sa_client c;
+	sa_client_init(&c, &cfg);
 
-	sc_set_log_function(&mylog);
+	sa_set_log_function(&mylog);
 
 	const char* path = "secrets:pass:pass";
 	size_t result_size = 0;
 
 	uint8_t* secret;
-	sc_err err = sc_secret_get_bytes(&c, path, &secret, &result_size);
+	sa_err err = sa_secret_get_bytes(&c, path, &secret, &result_size);
 	
-	assert(err.code == SC_OK);
+	assert(err.code == SA_OK);
 
 	secret[result_size] = 0;
 	assert(!strcmp(expected, (char*)secret));
@@ -245,12 +245,12 @@ void run_test(test_func f, char* name) {
 
 int main(int argc, char const *argv[])
 {
-	run_test(&test_sc_secret_get_bytes, "test_sc_secret_get_bytes");
-	run_test(&test_sc_secret_get_bytes_bad_address, "test_sc_secret_get_bytes_bad_address");
-	run_test(&test_sc_secret_get_bytes_bad_port, "test_sc_secret_get_bytes_bad_port");
-	run_test(&test_sc_secret_get_bytes_bad_secret, "test_sc_secret_get_bytes_bad_secret");
-	run_test(&test_sc_secret_get_bytes_missing_resource_name, "test_sc_secret_get_bytes_missing_resource_name");
-	run_test(&test_sc_secret_get_bytes_tls, "test_sc_secret_get_bytes_tls");
+	run_test(&test_sa_secret_get_bytes, "test_sa_secret_get_bytes");
+	run_test(&test_sa_secret_get_bytes_bad_address, "test_sa_secret_get_bytes_bad_address");
+	run_test(&test_sa_secret_get_bytes_bad_port, "test_sa_secret_get_bytes_bad_port");
+	run_test(&test_sa_secret_get_bytes_bad_secret, "test_sa_secret_get_bytes_bad_secret");
+	run_test(&test_sa_secret_get_bytes_missing_resource_name, "test_sa_secret_get_bytes_missing_resource_name");
+	run_test(&test_sa_secret_get_bytes_tls, "test_sa_secret_get_bytes_tls");
 
 	printf("TESTS SUCCEEDED\n");
 

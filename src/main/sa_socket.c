@@ -19,10 +19,10 @@
 // Includes.
 //
 
-#include "sc_error.h"
-#include "sc_socket.h"
-#include "sc_tls.h"
-#include "sc_logging.h"
+#include "sa_error.h"
+#include "sa_socket.h"
+#include "sa_tls.h"
+#include "sa_logging.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -43,16 +43,16 @@
 // Typedefs & constants.
 //
 
-#define SC_MAX_PORT 65535
-#define SC_MIN_PORT 1
+#define SA_MAX_PORT 65535
+#define SA_MIN_PORT 1
 
 //==========================================================
 // Forward Declarations.
 //
 
-static sc_socket* sc_socket_init(sc_socket* sock);
-static sc_err _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
-static sc_err _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+static sa_socket* sa_socket_init(sa_socket* sock);
+static sa_err _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
+static sa_err _write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 static int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
 
 //==========================================================
@@ -60,11 +60,11 @@ static int lookup_host(const char* hostname, const char* port, struct addrinfo**
 //
 
 // This assumes buffer is at least n bytes long.
-sc_err
-sc_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+sa_err
+sa_read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
 	if (sock->tls_cfg->enabled) {
-		return sc_tls_read_n_bytes(sock, n, buffer, timeout_ms);
+		return sa_tls_read_n_bytes(sock, n, buffer, timeout_ms);
 	}
 	else {
 		return _read_n_bytes(sock, n, buffer, timeout_ms);
@@ -72,35 +72,35 @@ sc_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 }
 
 // This assumes buffer is at least n bytes long.
-sc_err
-sc_write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+sa_err
+sa_write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
 	if (sock->tls_cfg->enabled) {
-		return sc_tls_write_n_bytes(sock, n, buffer, timeout_ms);
+		return sa_tls_write_n_bytes(sock, n, buffer, timeout_ms);
 	}
 	else {
 		return _write_n_bytes(sock, n, buffer, timeout_ms);
 	}
 }
 
-sc_err 
-sc_connect_addr_port(sc_socket** sockp, const char* addr, const char* port, sc_tls_cfg* tls_cfg, int timeout_ms)
+sa_err 
+sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_tls_cfg* tls_cfg, int timeout_ms)
 {
-	sc_err err;
-	err.code = SC_OK;
+	sa_err err;
+	err.code = SA_OK;
 
 	long port_num = strtol(port, NULL, 10);
-	if (port_num < SC_MIN_PORT || port_num > SC_MAX_PORT) {
-		sc_g_log_function("ERR: port: %ld is outside the valid port range %d - %d", port_num, SC_MIN_PORT, SC_MAX_PORT);
-		err.code = SC_FAILED_BAD_CONFIG;
+	if (port_num < SA_MIN_PORT || port_num > SA_MAX_PORT) {
+		sa_g_log_function("ERR: port: %ld is outside the valid port range %d - %d", port_num, SA_MIN_PORT, SA_MAX_PORT);
+		err.code = SA_FAILED_BAD_CONFIG;
 		return err;
 	}
 
 	struct addrinfo *host_info, *p;
 	int lookup_res = lookup_host(addr, port, &host_info);
 	if (lookup_res != 0) {
-		sc_g_log_function("ERR: failed to lookup address: %s", addr);
-		err.code = SC_FAILED_BAD_CONFIG;
+		sa_g_log_function("ERR: failed to lookup address: %s", addr);
+		err.code = SA_FAILED_BAD_CONFIG;
 		return err;
 	}
 
@@ -122,8 +122,8 @@ sc_connect_addr_port(sc_socket** sockp, const char* addr, const char* port, sc_t
 
 	if (p == NULL) {
 		// looped off the end of the list with no connection
-		sc_g_log_function("ERR: connect failed: %d, errno: %d", sock_fd, errno);
-		err.code = SC_FAILED_INTERNAL;
+		sa_g_log_function("ERR: connect failed: %d, errno: %d", sock_fd, errno);
+		err.code = SA_FAILED_INTERNAL;
 		freeaddrinfo(host_info);
 		return err;
 	}
@@ -133,28 +133,28 @@ sc_connect_addr_port(sc_socket** sockp, const char* addr, const char* port, sc_t
 	// mark the socket as non-blocking
 	int fcntl_res = fcntl(sock_fd, F_SETFL, O_NONBLOCK);
 	if (fcntl_res < 0) {
-		sc_g_log_function("ERR: could not set socket to non-blocking: %d", fcntl_res);
-		err.code = SC_FAILED_INTERNAL;
+		sa_g_log_function("ERR: could not set socket to non-blocking: %d", fcntl_res);
+		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
 
 	// wrap the socket, must be freed by caller
-	sc_socket* sock = (sc_socket*) malloc(sizeof(sc_socket));
+	sa_socket* sock = (sa_socket*) malloc(sizeof(sa_socket));
 	if (sock == NULL) {
-		sc_g_log_function("ERR: could not allocate memory for sc_socket");
-		err.code = SC_FAILED_INTERNAL;
+		sa_g_log_function("ERR: could not allocate memory for sa_socket");
+		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
 
-	sock = sc_socket_init(sock);
+	sock = sa_socket_init(sock);
 	sock->fd = sock_fd;
 
 	sock->tls_cfg = tls_cfg;
 	if (tls_cfg->enabled) {
-		sc_init_openssl();
-		if (sc_wrap_socket(sock) < 0) {
-			sc_g_log_function("ERR: failed to wrap socket for tls");
-			err.code = SC_FAILED_INTERNAL;
+		sa_init_openssl();
+		if (sa_wrap_socket(sock) < 0) {
+			sa_g_log_function("ERR: failed to wrap socket for tls");
+			err.code = SA_FAILED_INTERNAL;
 
 			close(sock_fd);
 			free(sock);
@@ -162,12 +162,12 @@ sc_connect_addr_port(sc_socket** sockp, const char* addr, const char* port, sc_t
 			return err;
 		}
 
-		err = sc_tls_connect(sock, timeout_ms);
+		err = sa_tls_connect(sock, timeout_ms);
 
-		if (err.code != SC_OK) {
-			sc_g_log_function("ERR: tls connection failed: %d", err.code);
+		if (err.code != SA_OK) {
+			sa_g_log_function("ERR: tls connection failed: %d", err.code);
 			close(sock_fd);
-			sc_socket_destroy(sock);
+			sa_socket_destroy(sock);
 			return err;
 		}
 	}
@@ -176,11 +176,11 @@ sc_connect_addr_port(sc_socket** sockp, const char* addr, const char* port, sc_t
 	return err; 
 }
 
-sc_err
-sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
+sa_err
+sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res)
 {
-	sc_err err;
-	err.code = SC_OK;
+	sa_err err;
+	err.code = SA_OK;
 
 	short events = POLLOUT;
 
@@ -197,13 +197,13 @@ sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
 	int p_res = poll(&pfd, fd_count, (int)timeout_ms);
 
 	if (p_res == 0) {
-		sc_g_log_function("ERR: socket poll timed out");
-		err.code = SC_FAILED_TIMEOUT;
+		sa_g_log_function("ERR: socket poll timed out");
+		err.code = SA_FAILED_TIMEOUT;
 		return err;
 	}
 	else if (p_res < 0) {
-		sc_g_log_function("ERR: socket poll err: %d, errno: %d", p_res, errno);
-		err.code = SC_FAILED_INTERNAL;
+		sa_g_log_function("ERR: socket poll err: %d, errno: %d", p_res, errno);
+		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
 
@@ -218,32 +218,32 @@ sc_socket_wait(sc_socket* sock, int timeout_ms, bool read, short* poll_res)
 	}
 
 	if (!socket_ready) {
-		sc_g_log_function("ERR: no sockets ready, revent: %d", pfd.revents);
-		err.code = SC_FAILED_INTERNAL;
+		sa_g_log_function("ERR: no sockets ready, revent: %d", pfd.revents);
+		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
 
 	return err;
 }
 
-sc_tls_cfg*
-sc_tls_cfg_init(sc_tls_cfg* cfg)
+sa_tls_cfg*
+sa_tls_cfg_init(sa_tls_cfg* cfg)
 {
 	cfg->ca_string = NULL;
 	cfg->enabled = false;
 	return cfg;
 }
 
-sc_tls_cfg*
-sc_tls_cfg_new()
+sa_tls_cfg*
+sa_tls_cfg_new()
 {
-	sc_tls_cfg* cfg = (sc_tls_cfg*) malloc(sizeof(sc_tls_cfg));
-	sc_tls_cfg_init(cfg);
+	sa_tls_cfg* cfg = (sa_tls_cfg*) malloc(sizeof(sa_tls_cfg));
+	sa_tls_cfg_init(cfg);
 	return cfg;
 }
 
 void
-sc_socket_destroy(sc_socket* sock)
+sa_socket_destroy(sa_socket* sock)
 {
 	if (sock->ssl != NULL) {
 		SSL_free(sock->ssl);
@@ -256,8 +256,8 @@ sc_socket_destroy(sc_socket* sock)
 // Private Helpers.
 //
 
-sc_socket*
-sc_socket_init(sc_socket* sock)
+sa_socket*
+sa_socket_init(sa_socket* sock)
 {
 	sock->fd = -2; // -2 so we can distinguish from -1 error and valid FDs
 	sock->ssl = NULL;
@@ -266,26 +266,26 @@ sc_socket_init(sc_socket* sock)
 	return sock;
 }
 
-sc_err
-_read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+sa_err
+_read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
-	sc_err err;
-	err.code = SC_OK;
+	sa_err err;
+	err.code = SA_OK;
 
 	int total_bytes_read = 0;
 	short poll_res = 0;
 	while (true)
 	{
-		err = sc_socket_wait(sock, timeout_ms, true, &poll_res);
-		if (err.code != SC_OK) {
-			sc_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
+		err = sa_socket_wait(sock, timeout_ms, true, &poll_res);
+		if (err.code != SA_OK) {
+			sa_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
 			return err;
 		}
 
 		int bytes_read = read(sock->fd, buffer + total_bytes_read, n - total_bytes_read);
 		if (bytes_read < 0 ) {
-			sc_g_log_function("ERR: socket read failed, return value: %d, errno: %d", bytes_read, errno);
-			err.code = SC_FAILED_INTERNAL;
+			sa_g_log_function("ERR: socket read failed, return value: %d, errno: %d", bytes_read, errno);
+			err.code = SA_FAILED_INTERNAL;
 			return err;
 		}
 
@@ -301,27 +301,27 @@ _read_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 	}
 }
 
-sc_err
-_write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
+sa_err
+_write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 {
-	sc_err err;
-	err.code = SC_OK;
+	sa_err err;
+	err.code = SA_OK;
 
 	int total_bytes_written = 0;
 	short poll_res = 0;
 	while (true)
 	{
-		err = sc_socket_wait(sock, timeout_ms, false, &poll_res);
-		if (err.code != SC_OK) {
-			sc_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
+		err = sa_socket_wait(sock, timeout_ms, false, &poll_res);
+		if (err.code != SA_OK) {
+			sa_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
 			return err;
 		}
 
 		int bytes_written = write(sock->fd, buffer + total_bytes_written, n - total_bytes_written);
 		if (bytes_written < 0 )
 		{
-			sc_g_log_function("ERR: socket write failed, return value: %d, errno: %d", bytes_written, errno);
-			err.code = SC_FAILED_INTERNAL;
+			sa_g_log_function("ERR: socket write failed, return value: %d, errno: %d", bytes_written, errno);
+			err.code = SA_FAILED_INTERNAL;
 			return err;
 		}
 

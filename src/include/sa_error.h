@@ -15,27 +15,17 @@
  * the License.
  */
 
-//==========================================================
-// Includes.
-//
+#pragma once
 
-#include "sc_logging.h"
+enum sa_error_code {
+	SA_OK,
+	SA_FAILED_BAD_REQUEST,
+	SA_FAILED_BAD_CONFIG,
+	SA_FAILED_INTERNAL,
+	SA_FAILED_TIMEOUT
+};
 
-//==========================================================
-// Globals.
-//
-
-sc_log_func* sc_g_log_function = sc_default_logger;
-
-//==========================================================
-// Public API.
-//
-
-void
-sc_set_log_function(sc_log_func* f)
+typedef struct sa_error_s
 {
-	sc_g_log_function = f;
-}
-
-void 
-sc_default_logger(const char* format, ...) {}
+	enum sa_error_code code;
+} sa_err;

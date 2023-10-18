@@ -96,8 +96,8 @@ ARFLAGS += rvs
 OBJECTS = $(SOURCE_NAMES:%=$(TARGET_OBJ)/%.o)
 TARGET_HEADERS = $(HEADER_NAMES:%=$(TARGET_INCL)/%.h)
 
-CLIENT_SHARED = $(TARGET_LIB)/libsecrets-client-c.$(DYNAMIC_SUFFIX)
-CLIENT_STATIC = $(TARGET_LIB)/libsecrets-client-c.a
+CLIENT_SHARED = $(TARGET_LIB)/libsecret-agent-client-c.$(DYNAMIC_SUFFIX)
+CLIENT_STATIC = $(TARGET_LIB)/libsecret-agent-client-c.a
 
 all: $(TARGET) $(OBJECTS) $(CLIENT_SHARED) $(CLIENT_STATIC) $(TARGET_HEADERS)
 
@@ -146,6 +146,6 @@ test: $(TARGET_TEST)
 	./src/test/tests
 
 $(TARGET_TEST): all
-	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -l:libsecrets-client-c.a -lssl -lcrypto -ljansson -o $@
-	#mac $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecrets-client-c -o $@
-	$(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecrets-client-c -o $@
+	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -l:libsecret-agent-client-c.a -lssl -lcrypto -ljansson -o $@
+	#mac $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o $@
+	$(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o $@

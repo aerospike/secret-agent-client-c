@@ -19,11 +19,11 @@
 // Includes.
 //
 
-#include "sc_secrets.h"
-#include "sc_socket.h"
-#include "sc_logging.h"
-#include "sc_client.h"
-#include "sc_error.h"
+#include "sa_secrets.h"
+#include "sa_socket.h"
+#include "sa_logging.h"
+#include "sa_client.h"
+#include "sa_error.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -43,32 +43,32 @@
 // Public API.
 //
 
-sc_client*
-sc_client_init(sc_client* c, sc_cfg* cfg) {
+sa_client*
+sa_client_init(sa_client* c, sa_cfg* cfg) {
 	c->cfg = cfg;
 	return c;
 }
 
-sc_client*
-sc_client_new(sc_cfg* cfg) {
-	sc_client* c = (sc_client*) malloc(sizeof(sc_client));
-	return sc_client_init(c, cfg);
+sa_client*
+sa_client_new(sa_cfg* cfg) {
+	sa_client* c = (sa_client*) malloc(sizeof(sa_client));
+	return sa_client_init(c, cfg);
 }
 
-sc_err
-sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* size_r) {
-	sc_err err;
-	err.code = SC_OK;
+sa_err
+sa_secret_get_bytes(const sa_client* c, const char* path, uint8_t** r, size_t* size_r) {
+	sa_err err;
+	err.code = SA_OK;
 
-	sc_cfg* cfg = c->cfg;
+	sa_cfg* cfg = c->cfg;
 
 	// path format will be "secrets[:resource_substring]:key"
-	const char* secret_request = path + sizeof(SC_SECRETS_PATH_REFIX) - 1;
+	const char* secret_request = path + sizeof(SA_SECRETS_PATH_REFIX) - 1;
 	uint32_t secret_request_len = (uint32_t)strlen(secret_request);
 
 	if (secret_request_len == 0) {
-		sc_g_log_function("ERR: empty secret key");
-		err.code = SC_FAILED_BAD_REQUEST;
+		sa_g_log_function("ERR: empty secret key");
+		err.code = SA_FAILED_BAD_REQUEST;
 		return err;
 	}
 
@@ -86,31 +86,31 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 		key++;
 	}
 
-	sc_socket* sock = NULL;
-	err = sc_connect_addr_port(&sock, cfg->addr, cfg->port, &cfg->tls, cfg->timeout);
-	if (err.code != SC_OK) {
-		sc_g_log_function("ERR: failed to create socket");
+	sa_socket* sock = NULL;
+	err = sa_connect_addr_port(&sock, cfg->addr, cfg->port, &cfg->tls, cfg->timeout);
+	if (err.code != SA_OK) {
+		sa_g_log_function("ERR: failed to create socket");
 		return err;
 	}
 
 	uint32_t key_len = (uint32_t)strlen(key);
 	char* json_buf = NULL;
-	err = sc_request_secret(&json_buf, sock, res, res_len, key, key_len, cfg->timeout);
+	err = sa_request_secret(&json_buf, sock, res, res_len, key, key_len, cfg->timeout);
 
 	close(sock->fd);
-	sc_socket_destroy(sock);
+	sa_socket_destroy(sock);
 
-	if (err.code != SC_OK) {
-		sc_g_log_function("ERR: empty secret json response");
+	if (err.code != SA_OK) {
+		sa_g_log_function("ERR: empty secret json response");
 		return err;
 	}
 
-	uint8_t* buf = sc_parse_json(json_buf, size_r);
+	uint8_t* buf = sa_parse_json(json_buf, size_r);
 	free(json_buf);
 
 	if (buf == NULL) {
-		sc_g_log_function("ERR: unable to fetch secret");
-		err.code = SC_FAILED_BAD_REQUEST;
+		sa_g_log_function("ERR: unable to fetch secret");
+		err.code = SA_FAILED_BAD_REQUEST;
 		return err;
 	}
 
@@ -118,17 +118,17 @@ sc_secret_get_bytes(const sc_client* c, const char* path, uint8_t** r, size_t* s
 	return err;
 }
 
-sc_cfg*
-sc_cfg_init(sc_cfg* cfg) {
+sa_cfg*
+sa_cfg_init(sa_cfg* cfg) {
 	cfg->addr = NULL;
 	cfg->port = NULL;
 	cfg->timeout = 1000;
-	sc_tls_cfg_init(&cfg->tls);
+	sa_tls_cfg_init(&cfg->tls);
 	return cfg;
 }
 
-sc_cfg*
-sc_cfg_new() {
-	sc_cfg* cfg = (sc_cfg*) malloc(sizeof(sc_cfg));
-	return sc_cfg_init(cfg);
+sa_cfg*
+sa_cfg_new() {
+	sa_cfg* cfg = (sa_cfg*) malloc(sizeof(sa_cfg));
+	return sa_cfg_init(cfg);
 }

@@ -17,11 +17,10 @@
 
 #pragma once
 
-#include "sc_error.h"
-#include "sc_socket.h"
+typedef void sa_log_func(const char* format, ...);
 
-#include <stdint.h>
+extern sa_log_func* sa_g_log_function;
 
-uint8_t* sc_parse_json(const char* json_buf, size_t* size_r);
+void sa_set_log_function(sa_log_func* f);
 
-sc_err sc_request_secret(char** resp, sc_socket* sock, const char* rsrc_sub, uint32_t rsrc_sub_len, const char* secret_key, uint32_t secret_key_len, int timeout_ms);
+void sa_default_logger(const char* format, ...);
