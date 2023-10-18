@@ -313,7 +313,6 @@ _write_n_bytes(sc_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 	{
 		err = sc_socket_wait(sock, timeout_ms, false, &poll_res);
 		if (err.code != SC_OK) {
-			err.code = SC_FAILED_INTERNAL;
 			sc_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
 			return err;
 		}

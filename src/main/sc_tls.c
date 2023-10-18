@@ -161,7 +161,6 @@ sc_tls_connect(sc_socket* sock, int timeout_ms)
 			sc_g_log_function("ERR: SSL_connect: unexpected ssl error: %d", sslerr);
 			err.code = SC_FAILED_INTERNAL;
 			return err;
-			break;
 		}
 	}
 }
