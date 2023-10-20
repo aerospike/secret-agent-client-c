@@ -25,10 +25,10 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
-#define AGENT_ADDR "0.0.0.0"
+#define AGENT_ADDR "host.docker.internal"
 #define AGENT_PORT "3005"
 
-#define AGENT_ADDR_TLS "0.0.0.0"
+#define AGENT_ADDR_TLS "host.docker.internal"
 #define AGENT_PORT_TLS "3006"
 
 void mylog(const char* format, ...)

@@ -11,6 +11,21 @@ SOURCE  = src
 TARGET  = target
 
 ###############################################################################
+##  SUBMODULES                                                               ##
+###############################################################################
+
+JANSSON_PATH = ./modules/jansson
+
+JANSSON_SOURCE = $(JANSSON_PATH)/src
+JANSSON_INCL = $(JANSSON_PATH)/src
+
+JANSSON_SOURCE_NAMES = $(basename $(notdir $(wildcard $(JANSSON_SOURCE)/*.c)))
+JANSSON_OBJECTS = $(JANSSON_SOURCE_NAMES:%=$(JANSSON_SOURCE)/%.o)
+
+MODULE_INCL = $(JANSSON_INCL)
+MODULE_OBJECTS = $(JANSSON_OBJECTS)
+
+###############################################################################
 ##  SOURCE PATHS                                                             ##
 ###############################################################################
 
@@ -20,7 +35,8 @@ SOURCE_INCL = $(SOURCE_PATH)/include
 SOURCE_TEST = $(SOURCE)/test
 
 LIB_PATH = 
-INC_PATH = $(SOURCE_INCL)
+INC_PATH = -I$(SOURCE_INCL)
+INC_PATH += -I$(MODULE_INCL)
 
 ###############################################################################
 ##  TARGET PATHS                                                             ##
@@ -58,9 +74,8 @@ HEADER_NAMES += $(basename $(notdir $(wildcard $(SOURCE_INCL)/*.h)))
 ###############################################################################
 
 LIBRARIES := 
-LIBRARIES += jansson
-LIBRARIES += ssl
-LIBRARIES += crypto
+LIBRARIES += -lssl
+LIBRARIES += -lcrypto
 
 ifeq ($(OS),Darwin)
   DYNAMIC_SUFFIX=dylib
@@ -78,8 +93,8 @@ ifeq ($(OS),Darwin)
 endif
 
 ifdef M1_HOME_BREW
-	INC_PATH += /opt/homebrew/include
-	LIB_PATH += /opt/homebrew/lib
+	INC_PATH += -I/opt/homebrew/include
+	LIB_PATH += -L/opt/homebrew/lib
 endif
 
 CFLAGS :=
@@ -99,7 +114,7 @@ TARGET_HEADERS = $(HEADER_NAMES:%=$(TARGET_INCL)/%.h)
 CLIENT_SHARED = $(TARGET_LIB)/libsecret-agent-client-c.$(DYNAMIC_SUFFIX)
 CLIENT_STATIC = $(TARGET_LIB)/libsecret-agent-client-c.a
 
-all: $(TARGET) $(OBJECTS) $(CLIENT_SHARED) $(CLIENT_STATIC) $(TARGET_HEADERS)
+all: modules $(TARGET) $(OBJECTS) $(CLIENT_SHARED) $(CLIENT_STATIC) $(TARGET_HEADERS)
 
 $(TARGET):
 	mkdir $(TARGET)
@@ -107,24 +122,24 @@ $(TARGET):
 $(TARGET_OBJ)/%.o: $(SOURCE_MAIN)/%.c | $(TARGET) 
 	@if [ ! -d `dirname $@` ]; then mkdir -p `dirname $@`; fi
 	$(strip $(CC) \
-		$(addprefix -I, $(INC_PATH)) \
+		$(INC_PATH) \
 		$(CFLAGS) \
 		-o $@ \
 		-c $(filter %.c, $<)  \
 	)
 
-$(CLIENT_SHARED): $(OBJECTS) | $(TARGET) 
+$(CLIENT_SHARED): $(MODULE_OBJECTS) $(OBJECTS) | $(TARGET)
 	@if [ ! -d `dirname $@` ]; then mkdir -p `dirname $@`; fi
 	$(strip $(CC) $(DYNAMIC_FLAG) \
-		$(addprefix -I, $(INC_PATH)) \
-		$(addprefix -L, $(LIB_PATH)) \
-		$(addprefix -l, $(LIBRARIES)) \
+		$(INC_PATH) \
+		$(LIB_PATH) \
+		$(LIBRARIES) \
 		-o $@ \
 		$(filter %.o, $^) \
 		$(LD_FLAGS) \
 	)
 
-$(CLIENT_STATIC): $(OBJECTS) | $(TARGET) 
+$(CLIENT_STATIC): $(MODULE_OBJECTS) $(OBJECTS) | $(TARGET) 
 	@if [ ! -d `dirname $@` ]; then mkdir -p `dirname $@`; fi
 	$(strip $(AR) \
 		$(ARFLAGS) \
@@ -137,7 +152,7 @@ $(TARGET_INCL)/%.h: $(SOURCE_INCL)/%.h | $(TARGET)
 	cp -p $^ $@
 
 .PHONY: clean
-clean:
+clean: modules-clean
 	rm -rf $(TARGET)
 	rm -f $(TARGET_TEST)
 
@@ -146,6 +161,13 @@ test: $(TARGET_TEST)
 	./src/test/tests
 
 $(TARGET_TEST): all
-	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -l:libsecret-agent-client-c.a -lssl -lcrypto -ljansson -o $@
+	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -L./$(TARGET_LIB) -lsecret-agent-client-c -lssl -lcrypto -o $@
+	#linux static $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -l:libsecret-agent-client-c.a -lssl -lcrypto -o $@
+
 	#mac $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o $@
-	$(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o $@
+	#mac static $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I./modules/jansson/src -I/opt/homebrew/include ./target/Darwin-arm64/lib/libsecret-agent-client-c.a -L/opt/homebrew/lib -lssl -lcrypto -o $@
+
+	$(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o
+
+###############################################################################
+include project/modules.mk
