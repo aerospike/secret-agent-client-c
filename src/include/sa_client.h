@@ -45,6 +45,7 @@ typedef struct sa_cfg_s
 	// resolved addresses plus the TLS handshake), then a separate one for each wait
 	// while sending the request and reading the response.
 	// DNS resolution (getaddrinfo) is blocking and not covered.
+	// 0 fails at once with SA_FAILED_TIMEOUT without connecting. Negative means no limit.
 	int timeout;
 	sa_tls_cfg tls; // tls configuration
 } sa_cfg;
