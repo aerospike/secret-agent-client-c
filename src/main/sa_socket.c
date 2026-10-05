@@ -20,6 +20,7 @@
 //
 
 #include "sa_error.h"
+#include "sa_internal.h"
 #include "sa_socket.h"
 #include "sa_tls.h"
 #include "sa_logging.h"
