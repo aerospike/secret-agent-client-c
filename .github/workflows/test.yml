@@ -10,17 +10,19 @@ permissions:
 
 jobs:
   linux:
-    name: make test (${{ matrix.name }})
-    runs-on: ubuntu-24.04
+    name: make test (${{ matrix.distro }})
+    runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: ubuntu-24.04, OpenSSL 3
-            container: ""
-          - name: rockylinux 8, OpenSSL 1.1.1
-            container: rockylinux:8
+          - { distro: ubuntu22.04, runner: ubuntu-22.04, container: '' }
+          - { distro: ubuntu24.04, runner: ubuntu-24.04, container: '' }
+          - { distro: ubuntu26.04, runner: ubuntu-24.04, container: 'ubuntu:26.04' }
+          - { distro: el8,         runner: ubuntu-24.04, container: 'rockylinux/rockylinux:8' }
+          - { distro: el9,         runner: ubuntu-24.04, container: 'rockylinux/rockylinux:9' }
+          - { distro: el10,        runner: ubuntu-24.04, container: 'rockylinux/rockylinux:10' }
     steps:
       - name: Harden the runner (Audit all outbound calls)
         if: matrix.container == ''
@@ -29,16 +31,19 @@ jobs:
           egress-policy: audit
 
       - name: Install build dependencies (ubuntu)
-        if: matrix.container == ''
+        if: startsWith(matrix.distro, 'ubuntu')
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libjansson-dev openssl
+          SUDO=$(command -v sudo || true)
+          $SUDO apt-get update
+          $SUDO apt-get install -y build-essential libssl-dev libjansson-dev openssl
 
-      - name: Install build dependencies (rockylinux 8)
-        if: matrix.container == 'rockylinux:8'
+      - name: Install build dependencies (el)
+        if: startsWith(matrix.distro, 'el')
         run: |
           dnf install -y dnf-plugins-core
-          dnf config-manager --set-enabled powertools
+          dnf config-manager --set-enabled ${{ matrix.distro == 'el8' && 'powertools' || 'crb' }}
           dnf install -y gcc make openssl openssl-devel jansson-devel
 
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1

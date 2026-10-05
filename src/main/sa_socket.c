@@ -20,7 +20,6 @@
 //
 
 #include "sa_error.h"
-#include "sa_internal.h"
 #include "sa_socket.h"
 #include "sa_tls.h"
 #include "sa_logging.h"
@@ -56,9 +55,10 @@ static sa_socket* sa_socket_init(sa_socket* sock);
 static sa_err _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 static sa_err _write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 static int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
-static const char* strip_brackets(const char* addr, char* buf, size_t buf_sz);
 static int connect_nonblocking(const struct addrinfo* ai, uint64_t deadline_ms, int* fdp);
 static int wait_connected(int fd, uint64_t deadline_ms);
+static uint64_t deadline_after(int timeout_ms);
+static int remaining_ms(uint64_t deadline_ms);
 static uint64_t now_ms();
 
 //==========================================================
@@ -102,29 +102,20 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 		return err;
 	}
 
-	char host_buf[SA_MAX_HOST_LEN];
-	const char* host = strip_brackets(addr, host_buf, sizeof(host_buf));
-
 	struct addrinfo *host_info, *p;
-	int lookup_res = lookup_host(host, port, &host_info);
+	int lookup_res = lookup_host(addr, port, &host_info);
 	if (lookup_res != 0) {
 		sa_g_log_function("ERR: failed to lookup address: %s", addr);
 		err.code = SA_FAILED_BAD_CONFIG;
 		return err;
 	}
 
-	// one deadline covers connecting to every address and the tls handshake
-	uint64_t deadline_ms = sa_deadline_ms(timeout_ms);
+	uint64_t deadline_ms = deadline_after(timeout_ms);
 	int sock_fd = -1;
-	int conn_err = ENOTCONN;
+	int conn_err = ETIMEDOUT;
 
 	// loop through all the results and connect to the first we can
-	for (p = host_info; p != NULL; p = p->ai_next) {
-		if (sa_remaining_ms(deadline_ms) == 0) {
-			conn_err = ETIMEDOUT;
-			break;
-		}
-
+	for (p = host_info; p != NULL && remaining_ms(deadline_ms) != 0; p = p->ai_next) {
 		conn_err = connect_nonblocking(p, deadline_ms, &sock_fd);
 		if (conn_err == 0) {
 			break; // successfully connected
@@ -133,18 +124,15 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 
 	freeaddrinfo(host_info);
 
+	if (conn_err == ETIMEDOUT) {
+		sa_g_log_function("ERR: connect timed out");
+		err.code = SA_FAILED_TIMEOUT;
+		return err;
+	}
+
 	if (conn_err != 0) {
-		errno = conn_err; // log functions may report errno
-
-		if (conn_err == ETIMEDOUT) {
-			sa_g_log_function("ERR: connect timed out");
-			err.code = SA_FAILED_TIMEOUT;
-		}
-		else {
-			sa_g_log_function("ERR: connect failed: %d, errno: %d", sock_fd, errno);
-			err.code = SA_FAILED_INTERNAL;
-		}
-
+		sa_g_log_function("ERR: connect failed, errno: %d", conn_err);
+		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
 
@@ -163,7 +151,7 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 	sock->tls_cfg = tls_cfg;
 	if (tls_cfg->enabled) {
 		sa_init_openssl();
-		if (sa_wrap_socket(sock, host) < 0) {
+		if (sa_wrap_socket(sock, addr) < 0) {
 			sa_g_log_function("ERR: failed to wrap socket for tls");
 			err.code = SA_FAILED_INTERNAL;
 
@@ -173,7 +161,7 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 			return err;
 		}
 
-		err = sa_tls_connect(sock, sa_remaining_ms(deadline_ms));
+		err = sa_tls_connect(sock, timeout_ms);
 
 		if (err.code != SA_OK) {
 			sa_g_log_function("ERR: tls connection failed: %d", err.code);
@@ -205,11 +193,11 @@ sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res)
 	};
 
 	nfds_t fd_count = 1;
-	uint64_t deadline_ms = sa_deadline_ms(timeout_ms);
+	uint64_t deadline_ms = deadline_after(timeout_ms);
 	int p_res;
 
 	do {
-		p_res = poll(&pfd, fd_count, sa_remaining_ms(deadline_ms));
+		p_res = poll(&pfd, fd_count, remaining_ms(deadline_ms));
 	} while (p_res < 0 && errno == EINTR);
 
 	if (p_res == 0) {
@@ -240,27 +228,6 @@ sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res)
 	}
 
 	return err;
-}
-
-uint64_t
-sa_deadline_ms(int timeout_ms)
-{
-	if (timeout_ms < 0) {
-		return 0;
-	}
-
-	return now_ms() + (uint64_t)timeout_ms;
-}
-
-int
-sa_remaining_ms(uint64_t deadline_ms)
-{
-	if (deadline_ms == 0) {
-		return -1;
-	}
-
-	uint64_t now = now_ms();
-	return now >= deadline_ms ? 0 : (int)(deadline_ms - now);
 }
 
 sa_tls_cfg*
@@ -405,31 +372,6 @@ lookup_host(const char* hostname, const char* port, struct addrinfo** res)
 	return ret;
 }
 
-/*
- * strip_brackets returns addr without the brackets
- * around an IPv6 literal such as [::1], copied into buf,
- * or addr itself when it is not bracketed.
-*/
-const char*
-strip_brackets(const char* addr, char* buf, size_t buf_sz)
-{
-	size_t len = strlen(addr);
-
-	if (len < 2 || addr[0] != '[' || addr[len - 1] != ']' || len - 2 >= buf_sz) {
-		return addr;
-	}
-
-	memcpy(buf, addr + 1, len - 2);
-	buf[len - 2] = '\0';
-	return buf;
-}
-
-/*
- * connect_nonblocking connects a new non-blocking socket to ai,
- * waiting no later than deadline_ms.
- * SUCCESS: 0 is returned and fdp is set to the connected socket.
- * FAILURE: an errno value is returned, ETIMEDOUT when the deadline passed.
-*/
 int
 connect_nonblocking(const struct addrinfo* ai, uint64_t deadline_ms, int* fdp)
 {
@@ -468,7 +410,7 @@ wait_connected(int fd, uint64_t deadline_ms)
 	int p_res;
 
 	do {
-		p_res = poll(&pfd, 1, sa_remaining_ms(deadline_ms));
+		p_res = poll(&pfd, 1, remaining_ms(deadline_ms));
 	} while (p_res == -1 && errno == EINTR);
 
 	if (p_res == 0) {
@@ -487,6 +429,23 @@ wait_connected(int fd, uint64_t deadline_ms)
 	}
 
 	return so_err;
+}
+
+uint64_t
+deadline_after(int timeout_ms)
+{
+	return timeout_ms < 0 ? 0 : now_ms() + (uint64_t)timeout_ms;
+}
+
+int
+remaining_ms(uint64_t deadline_ms)
+{
+	if (deadline_ms == 0) {
+		return -1;
+	}
+
+	uint64_t now = now_ms();
+	return now >= deadline_ms ? 0 : (int)(deadline_ms - now);
 }
 
 uint64_t

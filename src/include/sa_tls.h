@@ -33,8 +33,7 @@ int sa_wrap_socket(sa_socket* sock, const char* host);
 
 /*
  * sa_tls_connect attempts to perform a tls
- * connection over sock for up to timeout_ms
- * milliseconds in total.
+ * connection over sock for timeout_ms milliseconds.
 */
 sa_err sa_tls_connect(sa_socket* sock, int timeout_ms);
 

@@ -22,7 +22,6 @@
 #include "sa_logging.h"
 #include "sa_secrets.h"
 #include "sa_tls.h"
-#include "../main/sa_internal.h"
 
 #include <arpa/inet.h>
 #include <assert.h>
@@ -881,9 +880,11 @@ void test_tls_ipv6_literal()
 	tls_case("::1", "agent", "::1", "ca", X509_V_OK, "");
 }
 
-void test_tls_ipv6_literal_bracketed()
+void test_tls_ipv6_literal_bracketed_rejected()
 {
-	tls_case("::1", "agent", "[::1]", "ca", X509_V_OK, "");
+	sa_err err = fetch("[::1]", "3005", "ca", true, 3000, "secrets:pass:pass");
+
+	assert(err.code == SA_FAILED_BAD_CONFIG);
 }
 
 void test_tls_unrelated_ca()
@@ -958,7 +959,7 @@ void test_connect_refused_fails_fast()
 	timed_fetch("127.0.0.1", port, NULL, false, 5000, &err, &elapsed);
 
 	char line[128];
-	snprintf(line, sizeof(line), "ERR: connect failed: -1, errno: %d\n", ECONNREFUSED);
+	snprintf(line, sizeof(line), "ERR: connect failed, errno: %d\n", ECONNREFUSED);
 
 	assert(err.code == SA_FAILED_INTERNAL);
 	assert(elapsed < TIMING_MARGIN_MS);
@@ -1074,47 +1075,21 @@ void test_read_eintr()
 	assert(g_signals > 5);
 }
 
-void test_peer_name_forms()
+void test_tls_peer_name_forms()
 {
-	struct {
-		const char* host;
-		int is_ip;
-		const char* name;
-	} cases[] = {
-		{ "localhost", 0, "localhost" },
-		{ "localhost.", 0, "localhost" },
-		{ "agent.example.test.", 0, "agent.example.test" },
-		{ "localhost..", 0, "localhost." },
-		{ ".", 0, "." },
-		{ "127.0.0.1", 1, "127.0.0.1" },
-		{ "127.0.0.1.", 1, "127.0.0.1" },
-		{ "::1", 1, "::1" },
-		{ "::1.", -1, NULL },
-		{ "::ffff:127.0.0.1", 1, "::ffff:127.0.0.1" },
-		{ "fe80::1%lo0", 1, "fe80::1" },
-		{ "fe80::1%eth0", 1, "fe80::1" },
-		{ "127.0.0.1%lo", 0, "127.0.0.1%lo" },
-		{ "localhost%lo", 0, "localhost%lo" },
-	};
-
-	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-		char name[SA_MAX_HOST_LEN];
-		int is_ip = sa_tls_peer_name(cases[i].host, name, sizeof(name));
-
-		printf("%s -> %d %s\n", cases[i].host, is_ip, is_ip < 0 ? "" : name);
-		assert(is_ip == cases[i].is_ip);
-		assert(is_ip < 0 || !strcmp(cases[i].name, name));
-	}
-
-	char name[4];
-	assert(sa_tls_peer_name("abcd", name, sizeof(name)) == -1);
+	handshake_case("localhost", "agent", X509_V_OK, "localhost");
+	handshake_case("127.0.0.1", "agent", X509_V_OK, "");
+	handshake_case("::1", "agent", X509_V_OK, "");
+	handshake_case("::ffff:127.0.0.1", "agent", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+	handshake_case("127.0.0.1%lo", "agent", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
+	handshake_case("localhost%lo", "agent", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
 }
 
+// A name with a trailing dot is checked as a DNS name as is, so it does not match.
 void test_tls_trailing_dot()
 {
-	handshake_case("localhost.", "agent", X509_V_OK, "localhost");
-	handshake_case("127.0.0.1.", "agent", X509_V_OK, "");
-	handshake_case("127.0.0.1.", "wrong-name", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+	handshake_case("localhost.", "agent", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
+	handshake_case("127.0.0.1.", "agent", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
 
 	// "127.0.0.1." is not numeric to getaddrinfo, so resolving it depends on DNS.
 	struct addrinfo* res;
@@ -1125,13 +1100,35 @@ void test_tls_trailing_dot()
 	}
 
 	freeaddrinfo(res);
-	tls_case("127.0.0.1", "agent", "127.0.0.1.", "ca", X509_V_OK, "");
+	tls_case("127.0.0.1", "agent", "127.0.0.1.", "ca", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
+}
+
+// An IPv6 literal with a zone is not an IP literal to the certificate check, so TLS fails.
+// OpenSSL 3 rejects it as a peer name, older versions report a hostname mismatch.
+static void
+scoped_ipv6_fails(const char* listen_ip, const char* addr, const char* cert)
+{
+	fake_agent a;
+	sa_err err;
+
+	if (listen_ip == NULL) {
+		err = handshake_as(addr, cert, &a);
+	}
+	else {
+		bool started = agent_start(&a, listen_ip, cert, SECRET_RESPONSE);
+		assert(started);
+		err = fetch(addr, a.port, "ca", true, 3000, "secrets:pass:pass");
+		agent_stop(&a);
+	}
+
+	assert(err.code == SA_FAILED_INTERNAL);
+	assert(!a.answered);
 }
 
 void test_tls_scoped_ipv6()
 {
-	handshake_case("fe80::1%lo0", "agent", X509_V_OK, "");
-	handshake_case("fe80::1%lo0", "wrong-name", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+	scoped_ipv6_fails(NULL, "fe80::1%lo0", "agent");
+	scoped_ipv6_fails(NULL, "fe80::1%lo0", "wrong-name");
 }
 
 // Needs fe80::1 on the loopback interface, which macOS has by default.
@@ -1157,9 +1154,11 @@ void test_tls_scoped_ipv6_connect()
 	}
 
 	close(lfd);
-	tls_case(ip, "agent", ip, "ca", X509_V_OK, "");
-	tls_case(ip, "agent", bracketed, "ca", X509_V_OK, "");
-	tls_case(ip, "wrong-name", ip, "ca", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+	scoped_ipv6_fails(ip, ip, "agent");
+	scoped_ipv6_fails(ip, ip, "wrong-name");
+
+	sa_err err = fetch(bracketed, port, "ca", true, 3000, "secrets:pass:pass");
+	assert(err.code == SA_FAILED_BAD_CONFIG);
 }
 
 void test_tls_partial_wildcard()
@@ -1190,7 +1189,7 @@ typedef struct trickle_s {
 	pthread_t thread;
 } trickle;
 
-// Passes the client's bytes on at once, but the agent's one byte every 3 ms.
+// Passes the client's bytes on at once, but the agent's 8 bytes every 3 ms.
 static void*
 trickle_serve(void* arg)
 {
@@ -1230,7 +1229,7 @@ trickle_serve(void* arg)
 			}
 
 			if (p[1].revents != 0) {
-				ssize_t n = read(u, buf, 1);
+				ssize_t n = read(u, buf, 8);
 
 				if (n <= 0) {
 					break;
@@ -1238,7 +1237,7 @@ trickle_serve(void* arg)
 
 				usleep(3000);
 
-				if (write(c, buf, 1) != 1) {
+				if (write(c, buf, (size_t)n) != n) {
 					break;
 				}
 			}
@@ -1250,8 +1249,9 @@ trickle_serve(void* arg)
 	return NULL;
 }
 
-// Each byte of the handshake arrives well within the timeout, but the whole handshake does not.
-void test_tls_handshake_budget()
+// Each byte of the handshake arrives well within the timeout. Each wait gets its own timeout,
+// so the handshake completes although it takes longer than the timeout as a whole.
+void test_tls_handshake_wait_timeout()
 {
 	fake_agent a;
 	bool started = agent_start(&a, "127.0.0.1", "agent", SECRET_RESPONSE);
@@ -1273,12 +1273,12 @@ void test_tls_handshake_budget()
 	close(t.lfd);
 	agent_stop(&a);
 
-	assert(err.code == SA_FAILED_TIMEOUT);
-	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
-	assert(!a.answered);
+	assert(err.code == SA_OK);
+	assert(elapsed > CONNECT_TIMEOUT_MS);
+	assert(a.answered);
 }
 
-// Connecting takes 400 ms of the 800 ms timeout, so the handshake gets only what is left.
+// Connecting takes 400 ms of the 800 ms timeout. The handshake wait still gets the full 800 ms.
 void test_tls_handshake_after_slow_connect()
 {
 	char port[8];
@@ -1297,7 +1297,7 @@ void test_tls_handshake_after_slow_connect()
 	// fails if the library's socket() calls bypass the wrapper, e.g. when linked as a shared library
 	assert(g_delayed_sockets >= 1);
 	assert(err.code == SA_FAILED_TIMEOUT);
-	assert(elapsed >= 790 && elapsed < 800 + TIMING_MARGIN_MS);
+	assert(elapsed >= 1190 && elapsed < 1200 + TIMING_MARGIN_MS);
 	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
 }
 
@@ -1409,12 +1409,12 @@ int main(int argc, char const *argv[])
 	run_test(&test_sa_secret_get_bytes_tls, "test_sa_secret_get_bytes_tls");
 	run_test(&test_tls_ipv4_literal, "test_tls_ipv4_literal");
 	run_test(&test_tls_ipv6_literal, "test_tls_ipv6_literal");
-	run_test(&test_tls_ipv6_literal_bracketed, "test_tls_ipv6_literal_bracketed");
+	run_test(&test_tls_ipv6_literal_bracketed_rejected, "test_tls_ipv6_literal_bracketed_rejected");
 	run_test(&test_tls_unrelated_ca, "test_tls_unrelated_ca");
 	run_test(&test_tls_no_ca, "test_tls_no_ca");
 	run_test(&test_tls_hostname_mismatch, "test_tls_hostname_mismatch");
 	run_test(&test_tls_ip_not_in_san, "test_tls_ip_not_in_san");
-	run_test(&test_peer_name_forms, "test_peer_name_forms");
+	run_test(&test_tls_peer_name_forms, "test_tls_peer_name_forms");
 	run_test(&test_tls_trailing_dot, "test_tls_trailing_dot");
 	run_test(&test_tls_scoped_ipv6, "test_tls_scoped_ipv6");
 	run_test(&test_tls_scoped_ipv6_connect, "test_tls_scoped_ipv6_connect");
@@ -1428,7 +1428,7 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_eintr, "test_connect_eintr");
 	run_test(&test_tls_handshake_eintr, "test_tls_handshake_eintr");
 	run_test(&test_read_eintr, "test_read_eintr");
-	run_test(&test_tls_handshake_budget, "test_tls_handshake_budget");
+	run_test(&test_tls_handshake_wait_timeout, "test_tls_handshake_wait_timeout");
 	run_test(&test_tls_handshake_after_slow_connect, "test_tls_handshake_after_slow_connect");
 	run_test(&test_no_fd_leak, "test_no_fd_leak");
 

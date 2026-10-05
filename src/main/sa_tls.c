@@ -16,7 +16,6 @@
  */
 
 #include "sa_error.h"
-#include "sa_internal.h"
 #include "sa_socket.h"
 #include "sa_logging.h"
 
@@ -28,7 +27,6 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <stdbool.h>
-#include <string.h>
 #include <pthread.h>
 
 
@@ -116,7 +114,6 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 {
 	sa_err err;
 	int rv;
-	uint64_t deadline_ms = sa_deadline_ms(timeout_ms);
 
 	while (true) {
 		err.code = SA_OK;
@@ -132,7 +129,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 		char errbuf[1024];
 		switch (sslerr) {
 		case SSL_ERROR_WANT_READ:
-			err = sa_socket_wait(sock, sa_remaining_ms(deadline_ms), true, &pollres);
+			err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 			if (err.code != SA_OK) {
 				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
 				return err;
@@ -140,7 +137,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 			// loop back around and retry
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			err = sa_socket_wait(sock, sa_remaining_ms(deadline_ms), false, &pollres);
+			err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 			if (err.code != SA_OK) {
 				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
 				return err;
@@ -339,70 +336,18 @@ create_context()
 	return ctx;
 }
 
-int
-sa_tls_peer_name(const char* host, char* buf, size_t buf_sz)
-{
-	size_t len = strlen(host);
-
-	if (len >= buf_sz) {
-		return -1;
-	}
-
-	memcpy(buf, host, len + 1);
-
-	struct in6_addr ip;
-	char* zone = strchr(buf, '%');
-
-	if (zone != NULL) {
-		*zone = '\0';
-
-		if (inet_pton(AF_INET6, buf, &ip) == 1) {
-			return 1;
-		}
-
-		*zone = '%';
-	}
-
-	bool dot = len > 1 && buf[len - 1] == '.';
-
-	if (dot) {
-		buf[len - 1] = '\0';
-	}
-
-	if (inet_pton(AF_INET, buf, &ip) == 1) {
-		return 1;
-	}
-
-	if (inet_pton(AF_INET6, buf, &ip) == 1) {
-		// no resolver accepts an IPv6 literal with a trailing dot
-		return dot ? -1 : 1;
-	}
-
-	return 0;
-}
-
-// IP literals must match an IP SAN, anything else is checked as a DNS name.
 static bool
 tls_set_peer_name(SSL* ssl, const char* host)
 {
-	char name[SA_MAX_HOST_LEN];
-	int is_ip = sa_tls_peer_name(host, name, sizeof(name));
+	struct in6_addr ip;
 
-	if (is_ip < 0) {
-		return false;
-	}
-
-	if (is_ip) {
-		return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), name) == 1;
+	if (inet_pton(AF_INET, host, &ip) == 1 || inet_pton(AF_INET6, host, &ip) == 1) {
+		return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), host) == 1;
 	}
 
 	SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
 
-	if (SSL_set1_host(ssl, name) != 1) {
-		return false;
-	}
-
-	return SSL_set_tlsext_host_name(ssl, name) == 1;
+	return SSL_set1_host(ssl, host) == 1 && SSL_set_tlsext_host_name(ssl, host) == 1;
 }
 
 static void
