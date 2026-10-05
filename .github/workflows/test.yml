@@ -19,6 +19,7 @@ jobs:
         include:
           - { distro: ubuntu22.04, runner: ubuntu-22.04, container: '' }
           - { distro: ubuntu24.04, runner: ubuntu-24.04, container: '' }
+          - { distro: ubuntu24.04-asan, runner: ubuntu-24.04, container: '', cc: 'gcc -fsanitize=address -fno-omit-frame-pointer' }
           - { distro: ubuntu26.04, runner: ubuntu-24.04, container: 'ubuntu:26.04' }
           - { distro: el8,         runner: ubuntu-24.04, container: 'rockylinux/rockylinux:8' }
           - { distro: el9,         runner: ubuntu-24.04, container: 'rockylinux/rockylinux:9' }
@@ -53,6 +54,8 @@ jobs:
         run: sudo ip -6 addr add fe80::1/64 dev lo
 
       - name: make test
+        env:
+          CC: ${{ matrix.cc || 'cc' }}
         run: make test
 
   macos:
