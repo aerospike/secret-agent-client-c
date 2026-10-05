@@ -143,6 +143,11 @@ clean:
 
 TEST_CERTS = $(TARGET_BASE)/test-certs
 
+TEST_LIBRARIES := -lpthread
+ifneq ($(OS),Darwin)
+  TEST_LIBRARIES += -ldl
+endif
+
 .PHONY: test
 test: $(TARGET_TEST)
 	sh $(SOURCE_TEST)/gen-certs.sh $(TEST_CERTS)
@@ -155,5 +160,5 @@ $(TARGET_TEST): all
 		$(CLIENT_STATIC) \
 		$(addprefix -L, $(LIB_PATH)) \
 		$(addprefix -l, $(LIBRARIES)) \
-		-lpthread \
+		$(TEST_LIBRARIES) \
 	)

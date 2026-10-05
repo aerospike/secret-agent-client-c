@@ -4,6 +4,7 @@
 #   ca.pem, other-ca.pem         two unrelated CAs
 #   agent.pem, agent-key.pem     signed by ca, SAN DNS:localhost, IP:127.0.0.1, IP:::1, IP:fe80::1
 #   wrong-name.pem, ...-key.pem  signed by ca, SAN DNS:agent.invalid
+#   partial.pem, ...-key.pem     signed by ca, SAN DNS:a*.example.test
 #
 
 set -e
@@ -39,3 +40,4 @@ ca ca
 ca other-ca
 leaf agent ca "DNS:localhost,IP:127.0.0.1,IP:::1,IP:fe80::1"
 leaf wrong-name ca "DNS:agent.invalid"
+leaf partial ca "DNS:a*.example.test"

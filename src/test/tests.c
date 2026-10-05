@@ -15,6 +15,9 @@
  * the License.
  */
 
+// For RTLD_NEXT on glibc.
+#define _GNU_SOURCE
+
 #include "sa_client.h"
 #include "sa_logging.h"
 #include "sa_secrets.h"
@@ -23,7 +26,9 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
+#include <dlfcn.h>
 #include <errno.h>
+#include <jansson.h>
 #include <fcntl.h>
 #include <net/if.h>
 #include <netdb.h>
@@ -67,6 +72,9 @@ typedef struct fake_agent_s {
 	const char* response;
 	int delay_ms;
 	char sni[256];
+	char resource[64];
+	char key[64];
+	bool has_resource;
 	bool answered;
 	pthread_t thread;
 } fake_agent;
@@ -74,6 +82,24 @@ typedef struct fake_agent_s {
 static const char* g_cert_dir;
 static char g_log[16384];
 static bool g_skipped;
+static int g_socket_delay_ms;
+
+// The library is linked in statically, so its socket() calls land here. Lets a test slow down connecting.
+int
+socket(int domain, int type, int protocol)
+{
+	static int (*real_socket)(int, int, int);
+
+	if (real_socket == NULL) {
+		real_socket = (int (*)(int, int, int))dlsym(RTLD_NEXT, "socket");
+	}
+
+	if (g_socket_delay_ms > 0) {
+		usleep((useconds_t)g_socket_delay_ms * 1000);
+	}
+
+	return real_socket(domain, type, protocol);
+}
 
 void mylog(const char* format, ...)
 {
@@ -201,6 +227,21 @@ agent_answer(fake_agent* a, int fd, SSL* ssl)
 			ntohl(header[1]) > sizeof(req) || !agent_io(fd, ssl, req, ntohl(header[1]), false)) {
 		return;
 	}
+
+	json_error_t jerr;
+	json_t* doc = json_loadb(req, ntohl(header[1]), 0, &jerr);
+	const char* resource = NULL;
+	const char* key = NULL;
+
+	if (doc == NULL || json_unpack(doc, "{s?s, s:s !}", "Resource", &resource, "SecretKey", &key) != 0) {
+		json_decref(doc);
+		return;
+	}
+
+	a->has_resource = resource != NULL;
+	snprintf(a->resource, sizeof(a->resource), "%s", resource != NULL ? resource : "");
+	snprintf(a->key, sizeof(a->key), "%s", key);
+	json_decref(doc);
 
 	size_t len = strlen(a->response);
 
@@ -642,6 +683,7 @@ void test_sa_secret_get_bytes()
 
 	assert(err.code == SA_OK);
 	assert(a.answered);
+	assert(a.has_resource && !strcmp("pass", a.resource) && !strcmp("pass", a.key));
 }
 
 void test_sa_secret_get_bytes_bad_address()
@@ -670,6 +712,7 @@ void test_sa_secret_get_bytes_bad_secret()
 	agent_stop(&a);
 
 	assert(err.code == SA_FAILED_BAD_REQUEST);
+	assert(a.has_resource && !strcmp("pass", a.resource) && !strcmp("fakesecret", a.key));
 }
 
 void test_sa_secret_get_bytes_missing_resource_name()
@@ -682,6 +725,72 @@ void test_sa_secret_get_bytes_missing_resource_name()
 	agent_stop(&a);
 
 	assert(err.code == SA_FAILED_BAD_REQUEST);
+	assert(!a.has_resource && !strcmp("pass", a.key));
+}
+
+void test_request_resource_with_colons()
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
+	assert(started);
+
+	sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, "secrets:a:b:pass");
+	agent_stop(&a);
+
+	assert(err.code == SA_OK);
+	assert(a.has_resource && !strcmp("a:b", a.resource) && !strcmp("pass", a.key));
+}
+
+typedef struct fetch_job_s {
+	const char* port;
+	const char* path;
+	sa_err err;
+} fetch_job;
+
+static void*
+fetch_job_run(void* arg)
+{
+	fetch_job* j = (fetch_job*)arg;
+	j->err = fetch("127.0.0.1", j->port, NULL, false, 2000, j->path);
+	return NULL;
+}
+
+// The agent rejects the oversized request and closes the connection while it is still being written.
+void test_request_write_failure_log()
+{
+	const char* prefix = "secrets:res:";
+	size_t key_len = 16 * 1024 * 1024;
+	char* path = malloc(strlen(prefix) + key_len + 1);
+	strcpy(path, prefix);
+	memset(path + strlen(prefix), 'K', key_len);
+	path[strlen(prefix) + key_len] = '\0';
+
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
+	assert(started);
+
+	// the library builds the request on the stack
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);
+
+	fetch_job j = {
+		.port = a.port,
+		.path = path
+	};
+
+	pthread_t t;
+	int rv = pthread_create(&t, &attr, fetch_job_run, &j);
+	assert(rv == 0);
+	pthread_join(t, NULL);
+	pthread_attr_destroy(&attr);
+	agent_stop(&a);
+	free(path);
+
+	assert(j.err.code != SA_OK);
+	assert(!a.answered);
+	assert(strstr(g_log, "ERR: failed asking for secret\n") != NULL);
+	assert(strstr(g_log, "KKKK") == NULL);
 }
 
 void test_sa_secret_get_bytes_tls()
@@ -944,7 +1053,7 @@ void test_tls_scoped_ipv6_connect()
 {
 	char ifname[IF_NAMESIZE];
 	char ip[64];
-	char bracketed[64];
+	char bracketed[sizeof(ip) + 2];
 	char port[8];
 
 	if (if_indextoname(1, ifname) == NULL) {
@@ -966,6 +1075,206 @@ void test_tls_scoped_ipv6_connect()
 	tls_case(ip, "agent", ip, "ca", X509_V_OK, "");
 	tls_case(ip, "agent", bracketed, "ca", X509_V_OK, "");
 	tls_case(ip, "wrong-name", ip, "ca", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+}
+
+void test_tls_partial_wildcard()
+{
+	handshake_case("ab.example.test", "partial", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
+}
+
+void test_tls_ignores_system_trust_store()
+{
+	char ca_file[1024];
+	snprintf(ca_file, sizeof(ca_file), "%s/ca.pem", g_cert_dir);
+	setenv("SSL_CERT_FILE", ca_file, 1);
+	setenv("SSL_CERT_DIR", g_cert_dir, 1);
+
+	tls_case("127.0.0.1", "agent", "localhost", "other-ca",
+			X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, NULL);
+	tls_case("127.0.0.1", "agent", "localhost", NULL,
+			X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, NULL);
+
+	unsetenv("SSL_CERT_FILE");
+	unsetenv("SSL_CERT_DIR");
+}
+
+typedef struct trickle_s {
+	int lfd;
+	char port[8];
+	const char* upstream_port;
+	pthread_t thread;
+} trickle;
+
+// Passes the client's bytes on at once, but the agent's one byte every 3 ms.
+static void*
+trickle_serve(void* arg)
+{
+	trickle* t = (trickle*)arg;
+	struct pollfd lp = {
+		.fd = t->lfd,
+		.events = POLLIN
+	};
+
+	if (poll(&lp, 1, 5000) != 1) {
+		return NULL;
+	}
+
+	int c = accept(t->lfd, NULL, NULL);
+	int u = socket(AF_INET, SOCK_STREAM, 0);
+
+	struct sockaddr_in sin;
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons((uint16_t)atoi(t->upstream_port));
+	inet_pton(AF_INET, "127.0.0.1", &sin.sin_addr);
+
+	if (c >= 0 && u >= 0 && connect(u, (struct sockaddr*)&sin, sizeof(sin)) == 0) {
+		struct pollfd p[2] = {
+			{ .fd = c, .events = POLLIN },
+			{ .fd = u, .events = POLLIN }
+		};
+		char buf[4096];
+
+		while (poll(p, 2, 5000) > 0) {
+			if (p[0].revents != 0) {
+				ssize_t n = read(c, buf, sizeof(buf));
+
+				if (n <= 0 || write(u, buf, (size_t)n) != n) {
+					break;
+				}
+			}
+
+			if (p[1].revents != 0) {
+				ssize_t n = read(u, buf, 1);
+
+				if (n <= 0) {
+					break;
+				}
+
+				usleep(3000);
+
+				if (write(c, buf, 1) != 1) {
+					break;
+				}
+			}
+		}
+	}
+
+	close(c);
+	close(u);
+	return NULL;
+}
+
+// Each byte of the handshake arrives well within the timeout, but the whole handshake does not.
+void test_tls_handshake_budget()
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", "agent", SECRET_RESPONSE);
+	assert(started);
+
+	trickle t;
+	t.lfd = listen_on("127.0.0.1", 8, t.port, sizeof(t.port));
+	t.upstream_port = a.port;
+	assert(t.lfd >= 0);
+
+	int rv = pthread_create(&t.thread, NULL, trickle_serve, &t);
+	assert(rv == 0);
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", t.port, "ca", true, CONNECT_TIMEOUT_MS, &err, &elapsed);
+
+	pthread_join(t.thread, NULL);
+	close(t.lfd);
+	agent_stop(&a);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+	assert(!a.answered);
+}
+
+// Connecting takes 400 ms of the 800 ms timeout, so the handshake gets only what is left.
+void test_tls_handshake_after_slow_connect()
+{
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 8, port, sizeof(port));
+	assert(lfd >= 0);
+
+	sa_err err;
+	uint64_t elapsed;
+
+	g_socket_delay_ms = 400;
+	timed_fetch("127.0.0.1", port, "ca", true, 800, &err, &elapsed);
+	g_socket_delay_ms = 0;
+	close(lfd);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed >= 790 && elapsed < 800 + TIMING_MARGIN_MS);
+	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
+}
+
+static int
+count_fds()
+{
+	int n = 0;
+
+	for (int fd = 0; fd < 1024; fd++) {
+		if (fcntl(fd, F_GETFD) != -1) {
+			n++;
+		}
+	}
+
+	return n;
+}
+
+static void
+failure_paths(blackhole* b)
+{
+	const char* path = "secrets:pass:pass";
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 1, port, sizeof(port));
+	assert(lfd >= 0);
+	close(lfd);
+
+	fetch("127.0.0.1", port, NULL, false, 1000, path);
+	fetch("localhost", port, NULL, false, 1000, path);
+	fetch("256.0.0.0", port, NULL, false, 1000, path);
+	fetch("127.0.0.1", port, NULL, false, 0, path);
+
+	lfd = listen_on("127.0.0.1", 8, port, sizeof(port));
+	assert(lfd >= 0);
+	fetch("127.0.0.1", port, "ca", true, 30, path);
+	close(lfd);
+
+	tls_case("127.0.0.1", "wrong-name", "localhost", "ca", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
+
+	if (b != NULL) {
+		fetch(b->addr, b->port, NULL, false, 30, path);
+		fetch(b->addr, b->port, "ca", true, 30, path);
+	}
+}
+
+void test_no_fd_leak()
+{
+	blackhole b;
+	bool have_blackhole = blackhole_start(&b);
+
+	// the first round opens anything OpenSSL keeps open
+	failure_paths(have_blackhole ? &b : NULL);
+	int before = count_fds();
+
+	for (int i = 0; i < 10; i++) {
+		failure_paths(have_blackhole ? &b : NULL);
+	}
+
+	int after = count_fds();
+
+	if (have_blackhole) {
+		blackhole_stop(&b);
+	}
+
+	printf("fds before: %d, after: %d\n", before, after);
+	assert(after == before);
 }
 
 typedef void (*test_func)();
@@ -994,6 +1303,8 @@ int main(int argc, char const *argv[])
 	run_test(&test_sa_secret_get_bytes_bad_port, "test_sa_secret_get_bytes_bad_port");
 	run_test(&test_sa_secret_get_bytes_bad_secret, "test_sa_secret_get_bytes_bad_secret");
 	run_test(&test_sa_secret_get_bytes_missing_resource_name, "test_sa_secret_get_bytes_missing_resource_name");
+	run_test(&test_request_resource_with_colons, "test_request_resource_with_colons");
+	run_test(&test_request_write_failure_log, "test_request_write_failure_log");
 	run_test(&test_sa_secret_get_bytes_tls, "test_sa_secret_get_bytes_tls");
 	run_test(&test_tls_ipv4_literal, "test_tls_ipv4_literal");
 	run_test(&test_tls_ipv6_literal, "test_tls_ipv6_literal");
@@ -1006,6 +1317,8 @@ int main(int argc, char const *argv[])
 	run_test(&test_tls_trailing_dot, "test_tls_trailing_dot");
 	run_test(&test_tls_scoped_ipv6, "test_tls_scoped_ipv6");
 	run_test(&test_tls_scoped_ipv6_connect, "test_tls_scoped_ipv6_connect");
+	run_test(&test_tls_partial_wildcard, "test_tls_partial_wildcard");
+	run_test(&test_tls_ignores_system_trust_store, "test_tls_ignores_system_trust_store");
 	run_test(&test_connect_timeout_blackhole, "test_connect_timeout_blackhole");
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
@@ -1014,6 +1327,9 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_eintr, "test_connect_eintr");
 	run_test(&test_tls_handshake_eintr, "test_tls_handshake_eintr");
 	run_test(&test_read_eintr, "test_read_eintr");
+	run_test(&test_tls_handshake_budget, "test_tls_handshake_budget");
+	run_test(&test_tls_handshake_after_slow_connect, "test_tls_handshake_after_slow_connect");
+	run_test(&test_no_fd_leak, "test_no_fd_leak");
 
 	printf("TESTS SUCCEEDED%s\n", g_skipped ? " (some skipped)" : "");
 
