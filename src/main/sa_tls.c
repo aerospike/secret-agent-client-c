@@ -362,12 +362,20 @@ sa_tls_peer_name(const char* host, char* buf, size_t buf_sz)
 
 		*zone = '%';
 	}
-	else if (inet_pton(AF_INET, buf, &ip) == 1 || inet_pton(AF_INET6, buf, &ip) == 1) {
+
+	bool dot = len > 1 && buf[len - 1] == '.';
+
+	if (dot) {
+		buf[len - 1] = '\0';
+	}
+
+	if (inet_pton(AF_INET, buf, &ip) == 1) {
 		return 1;
 	}
 
-	if (len > 1 && buf[len - 1] == '.') {
-		buf[len - 1] = '\0';
+	if (inet_pton(AF_INET6, buf, &ip) == 1) {
+		// no resolver accepts an IPv6 literal with a trailing dot
+		return dot ? -1 : 1;
 	}
 
 	return 0;

@@ -1016,7 +1016,9 @@ void test_peer_name_forms()
 		{ "localhost..", 0, "localhost." },
 		{ ".", 0, "." },
 		{ "127.0.0.1", 1, "127.0.0.1" },
+		{ "127.0.0.1.", 1, "127.0.0.1" },
 		{ "::1", 1, "::1" },
+		{ "::1.", -1, NULL },
 		{ "::ffff:127.0.0.1", 1, "::ffff:127.0.0.1" },
 		{ "fe80::1%lo0", 1, "fe80::1" },
 		{ "fe80::1%eth0", 1, "fe80::1" },
@@ -1028,9 +1030,9 @@ void test_peer_name_forms()
 		char name[SA_MAX_HOST_LEN];
 		int is_ip = sa_tls_peer_name(cases[i].host, name, sizeof(name));
 
-		printf("%s -> %d %s\n", cases[i].host, is_ip, name);
+		printf("%s -> %d %s\n", cases[i].host, is_ip, is_ip < 0 ? "" : name);
 		assert(is_ip == cases[i].is_ip);
-		assert(!strcmp(cases[i].name, name));
+		assert(is_ip < 0 || !strcmp(cases[i].name, name));
 	}
 
 	char name[4];
@@ -1040,6 +1042,9 @@ void test_peer_name_forms()
 void test_tls_trailing_dot()
 {
 	handshake_case("localhost.", "agent", X509_V_OK, "localhost");
+	handshake_case("127.0.0.1.", "agent", X509_V_OK, "");
+	handshake_case("127.0.0.1.", "wrong-name", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+	tls_case("127.0.0.1", "agent", "127.0.0.1.", "ca", X509_V_OK, "");
 }
 
 void test_tls_scoped_ipv6()
