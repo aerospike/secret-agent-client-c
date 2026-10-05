@@ -26,6 +26,7 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
+#include <ctype.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <jansson.h>
@@ -60,6 +61,7 @@
 #define LEAK_SECRET_B64 "czNjcjN0LXZhbHVl"
 
 #define TEST_TIMEOUT_S 30
+#define KICK_MAX_MS 2000
 #define CONNECT_TIMEOUT_MS 500
 #define TIMING_MARGIN_MS 300
 #define MAX_BACKLOG_FILL 64
@@ -80,9 +82,12 @@ typedef struct fake_agent_s {
 } fake_agent;
 
 static const char* g_cert_dir;
+static const char* g_test_name;
+static char g_timeout_msg[256];
 static char g_log[16384];
-static bool g_skipped;
+static char g_skipped[1024];
 static int g_socket_delay_ms;
+static int g_delayed_sockets;
 
 // The library is linked in statically, so its socket() calls land here. Lets a test slow down connecting.
 int
@@ -95,6 +100,7 @@ socket(int domain, int type, int protocol)
 	}
 
 	if (g_socket_delay_ms > 0) {
+		g_delayed_sockets++;
 		usleep((useconds_t)g_socket_delay_ms * 1000);
 	}
 
@@ -113,6 +119,55 @@ void mylog(const char* format, ...)
 	printf("LOGGED DURING TEST: %s\n", line);
 	strncat(g_log, line, sizeof(g_log) - strlen(g_log) - 1);
 	strncat(g_log, "\n", sizeof(g_log) - strlen(g_log) - 1);
+
+	// raw request or response bytes would show up as non-printable characters
+	for (const char* p = line; *p != '\0'; p++) {
+		assert(isprint((unsigned char)*p));
+	}
+}
+
+static void
+skip(const char* format, ...)
+{
+	va_list args;
+
+	printf("SKIPPED: ");
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
+	printf("\n");
+
+	if (strstr(g_skipped, g_test_name) == NULL) {
+		snprintf(g_skipped + strlen(g_skipped), sizeof(g_skipped) - strlen(g_skipped), "%s%s",
+				g_skipped[0] != '\0' ? ", " : "", g_test_name);
+	}
+}
+
+// Each pattern is a whole log line, or a line prefix when it ends with '*'.
+static void
+assert_log_lines(const char* const* patterns, size_t n)
+{
+	char* copy = strdup(g_log);
+	char* save = NULL;
+
+	for (char* line = strtok_r(copy, "\n", &save); line != NULL; line = strtok_r(NULL, "\n", &save)) {
+		bool ok = false;
+
+		for (size_t i = 0; i < n && !ok; i++) {
+			size_t len = strlen(patterns[i]);
+
+			ok = patterns[i][len - 1] == '*' ? strncmp(line, patterns[i], len - 1) == 0 :
+					strcmp(line, patterns[i]) == 0;
+		}
+
+		if (!ok) {
+			printf("unexpected log line: %s\n", line);
+		}
+
+		assert(ok);
+	}
+
+	free(copy);
 }
 
 char* readCertFile(const char* name)
@@ -356,7 +411,7 @@ agent_stop(fake_agent* a)
 //
 
 static sa_err
-fetch(const char* addr, const char* port, const char* ca_name, bool tls, int timeout,
+fetch_ca(const char* addr, const char* port, const char* ca_string, bool tls, int timeout,
 		const char* path)
 {
 	sa_cfg cfg;
@@ -365,10 +420,7 @@ fetch(const char* addr, const char* port, const char* ca_name, bool tls, int tim
 	cfg.port = (char*)port;
 	cfg.timeout = timeout;
 	cfg.tls.enabled = tls;
-
-	if (ca_name != NULL) {
-		cfg.tls.ca_string = readCertFile(ca_name);
-	}
+	cfg.tls.ca_string = (char*)ca_string;
 
 	sa_client c;
 	sa_client_init(&c, &cfg);
@@ -385,7 +437,17 @@ fetch(const char* addr, const char* port, const char* ca_name, bool tls, int tim
 		free(secret);
 	}
 
-	free(cfg.tls.ca_string);
+	return err;
+}
+
+static sa_err
+fetch(const char* addr, const char* port, const char* ca_name, bool tls, int timeout,
+		const char* path)
+{
+	char* ca_string = ca_name != NULL ? readCertFile(ca_name) : NULL;
+	sa_err err = fetch_ca(addr, port, ca_string, tls, timeout, path);
+
+	free(ca_string);
 	return err;
 }
 
@@ -513,12 +575,14 @@ on_signal(int sig)
 	g_signals++;
 }
 
+// Stops after KICK_MAX_MS, so a wait that restarts its full timeout on every signal still ends.
 static void*
 kicker(void* arg)
 {
 	(void)arg;
+	uint64_t start = now_ms();
 
-	while (g_kick) {
+	while (g_kick && now_ms() - start < KICK_MAX_MS) {
 		pthread_kill(g_kick_target, SIGUSR1);
 		usleep(20000);
 	}
@@ -570,8 +634,7 @@ tls_case(const char* listen_ip, const char* cert, const char* addr, const char* 
 	fake_agent a;
 
 	if (!agent_start(&a, listen_ip, cert, SECRET_RESPONSE)) {
-		printf("SKIPPED: cannot listen on %s\n", listen_ip);
-		g_skipped = true;
+		skip("cannot listen on %s", listen_ip);
 		return;
 	}
 
@@ -787,10 +850,20 @@ void test_request_write_failure_log()
 	agent_stop(&a);
 	free(path);
 
+	const char* const expected[] = {
+		"ERR: socket write failed, return value: -1, errno: *",
+		"ERR: socket poll failed on write, return value: *",
+		"ERR: no sockets ready, revent: *",
+		"ERR: failed asking for secret",
+		"ERR: empty secret json response"
+	};
+
 	assert(j.err.code != SA_OK);
 	assert(!a.answered);
 	assert(strstr(g_log, "ERR: failed asking for secret\n") != NULL);
 	assert(strstr(g_log, "KKKK") == NULL);
+	assert(strstr(g_log, "\x51\xde\xc1\xcc") == NULL);
+	assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
 }
 
 void test_sa_secret_get_bytes_tls()
@@ -840,8 +913,7 @@ void test_connect_timeout_blackhole()
 	blackhole b;
 
 	if (!blackhole_start(&b)) {
-		printf("SKIPPED: no address that drops SYNs found\n");
-		g_skipped = true;
+		skip("no address that drops SYNs found");
 		return;
 	}
 
@@ -940,8 +1012,7 @@ void test_connect_eintr()
 	blackhole b;
 
 	if (!blackhole_start(&b)) {
-		printf("SKIPPED: no address that drops SYNs found\n");
-		g_skipped = true;
+		skip("no address that drops SYNs found");
 		return;
 	}
 
@@ -1071,8 +1142,7 @@ void test_tls_scoped_ipv6_connect()
 	int lfd = listen_on(ip, 1, port, sizeof(port));
 
 	if (lfd < 0) {
-		printf("SKIPPED: cannot listen on %s\n", ip);
-		g_skipped = true;
+		skip("cannot listen on %s", ip);
 		return;
 	}
 
@@ -1208,11 +1278,14 @@ void test_tls_handshake_after_slow_connect()
 	sa_err err;
 	uint64_t elapsed;
 
+	g_delayed_sockets = 0;
 	g_socket_delay_ms = 400;
 	timed_fetch("127.0.0.1", port, "ca", true, 800, &err, &elapsed);
 	g_socket_delay_ms = 0;
 	close(lfd);
 
+	// fails if the library's socket() calls bypass the wrapper, e.g. when linked as a shared library
+	assert(g_delayed_sockets >= 1);
 	assert(err.code == SA_FAILED_TIMEOUT);
 	assert(elapsed >= 790 && elapsed < 800 + TIMING_MARGIN_MS);
 	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
@@ -1249,6 +1322,7 @@ failure_paths(blackhole* b)
 	lfd = listen_on("127.0.0.1", 8, port, sizeof(port));
 	assert(lfd >= 0);
 	fetch("127.0.0.1", port, "ca", true, 30, path);
+	fetch_ca("127.0.0.1", port, "", true, 1000, path);
 	close(lfd);
 
 	tls_case("127.0.0.1", "wrong-name", "localhost", "ca", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
@@ -1284,8 +1358,19 @@ void test_no_fd_leak()
 
 typedef void (*test_func)();
 
+static void
+on_watchdog(int sig)
+{
+	(void)sig;
+	ssize_t rv = write(STDOUT_FILENO, g_timeout_msg, strlen(g_timeout_msg));
+	(void)rv;
+	abort();
+}
+
 void run_test(test_func f, char* name) {
 	printf("\nRunning test: %s\n", name);
+	g_test_name = name;
+	snprintf(g_timeout_msg, sizeof(g_timeout_msg), "\nTIMED OUT after %d s: %s\n", TEST_TIMEOUT_S, name);
 	g_log[0] = 0;
 	alarm(TEST_TIMEOUT_S);
 	f();
@@ -1302,6 +1387,7 @@ int main(int argc, char const *argv[])
 	g_cert_dir = argv[1];
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	signal(SIGPIPE, SIG_IGN);
+	signal(SIGALRM, on_watchdog);
 
 	run_test(&test_sa_secret_get_bytes, "test_sa_secret_get_bytes");
 	run_test(&test_sa_secret_get_bytes_bad_address, "test_sa_secret_get_bytes_bad_address");
@@ -1336,7 +1422,7 @@ int main(int argc, char const *argv[])
 	run_test(&test_tls_handshake_after_slow_connect, "test_tls_handshake_after_slow_connect");
 	run_test(&test_no_fd_leak, "test_no_fd_leak");
 
-	printf("TESTS SUCCEEDED%s\n", g_skipped ? " (some skipped)" : "");
+	printf("TESTS SUCCEEDED%s%s\n", g_skipped[0] != '\0' ? ", skipped: " : "", g_skipped);
 
 	return 0;
 }
