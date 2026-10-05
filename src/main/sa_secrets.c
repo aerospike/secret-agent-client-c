@@ -25,7 +25,6 @@
 #include "sa_socket.h"
 #include "sa_logging.h"
 
-#include <assert.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
@@ -66,26 +65,37 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 	sa_err err;
 	err.code = SA_OK;
 
-	char req[100 + rsrc_substr_len + secret_key_len];
-	char* json = &req[SA_HEADER_SIZE]; // json starts after 8 byte header
+	json_t* doc = rsrc_substr_len == 0 ?
+			json_pack("{s:s%}", "SecretKey", secret_key, (size_t)secret_key_len) :
+			json_pack("{s:s%, s:s%}", "Resource", rsrc_substr, (size_t)rsrc_substr_len,
+					"SecretKey", secret_key, (size_t)secret_key_len);
+	char* json = doc != NULL ? json_dumps(doc, JSON_COMPACT) : NULL;
+	json_decref(doc);
 
-	if (rsrc_substr_len == 0) {
-		sprintf(json, "{\"SecretKey\":\"%.*s\"}", secret_key_len, secret_key);
-	}
-	else {
-		sprintf(json,
-				"{\"Resource\":\"%.*s\",\"SecretKey\":\"%.*s\"}",
-				rsrc_substr_len, rsrc_substr, secret_key_len, secret_key);
+	if (json == NULL) {
+		sa_g_log_function("ERR: failed to build request JSON");
+		err.code = SA_FAILED_BAD_REQUEST;
+		return err;
 	}
 
 	uint32_t json_sz = (uint32_t)strlen(json);
+	char* req = malloc(SA_HEADER_SIZE + json_sz);
 
-	assert(SA_HEADER_SIZE + json_sz <= sizeof(req));
+	if (req == NULL) {
+		free(json);
+		sa_g_log_function("ERR: could not allocate memory for request");
+		err.code = SA_FAILED_INTERNAL;
+		return err;
+	}
 
-	*(uint32_t*)&req[0] = ntohl(SA_MAGIC);
-	*(uint32_t*)&req[4] = ntohl(json_sz);
+	*(uint32_t*)&req[0] = htonl(SA_MAGIC);
+	*(uint32_t*)&req[4] = htonl(json_sz);
+	memcpy(&req[SA_HEADER_SIZE], json, json_sz);
+	free(json);
 
 	err = sa_write_n_bytes(sock, SA_HEADER_SIZE + json_sz, req, timeout_ms);
+	free(req);
+
 	if (err.code != SA_OK) {
 		sa_g_log_function("ERR: failed asking for secret");
 		return err;
@@ -117,9 +127,16 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 
 	char *recv_json = malloc(recv_json_sz + 1);
 
+	if (recv_json == NULL) {
+		sa_g_log_function("ERR: could not allocate memory for response");
+		err.code = SA_FAILED_INTERNAL;
+		return err;
+	}
+
 	err = sa_read_n_bytes(sock, recv_json_sz, recv_json, timeout_ms);
 	if (err.code != SA_OK) {
 		sa_g_log_function("ERR: failed reading secret errno: %d", errno);
+		free(recv_json);
 		return err;
 	}
 

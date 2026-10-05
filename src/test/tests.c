@@ -72,6 +72,7 @@ typedef struct fake_agent_s {
 	SSL_CTX* ctx;
 	const char* response;
 	int delay_ms;
+	size_t truncate_reply_at;
 	char sni[256];
 	char resource[64];
 	char key[64];
@@ -304,8 +305,11 @@ agent_answer(fake_agent* a, int fd, SSL* ssl)
 	header[0] = htonl(SA_MAGIC);
 	header[1] = htonl((uint32_t)len);
 
-	if (agent_io(fd, ssl, header, sizeof(header), true) &&
-			agent_io(fd, ssl, (void*)a->response, len, true)) {
+	size_t send_len = a->truncate_reply_at != 0 ? a->truncate_reply_at : sizeof(header) + len;
+	size_t header_len = send_len < sizeof(header) ? send_len : sizeof(header);
+
+	if (agent_io(fd, ssl, header, header_len, true) &&
+			agent_io(fd, ssl, (void*)a->response, send_len - header_len, true)) {
 		a->answered = true;
 	}
 }
@@ -803,21 +807,41 @@ void test_request_resource_with_colons()
 	assert(a.has_resource && !strcmp("a:b", a.resource) && !strcmp("pass", a.key));
 }
 
-typedef struct fetch_job_s {
-	const char* port;
-	const char* path;
-	sa_err err;
-} fetch_job;
-
-static void*
-fetch_job_run(void* arg)
+void test_request_escaping()
 {
-	fetch_job* j = (fetch_job*)arg;
-	j->err = fetch("127.0.0.1", j->port, NULL, false, 2000, j->path);
-	return NULL;
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
+	assert(started);
+
+	sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, "secrets:a\"b\\c:d\"e\\f");
+	agent_stop(&a);
+
+	assert(err.code == SA_OK);
+	assert(a.has_resource && !strcmp("a\"b\\c", a.resource) && !strcmp("d\"e\\f", a.key));
+}
+
+// The agent closes the connection partway through the header, then partway through the body.
+void test_truncated_reply()
+{
+	size_t cut_at[] = { 4, 18 };
+
+	for (size_t i = 0; i < sizeof(cut_at) / sizeof(cut_at[0]); i++) {
+		fake_agent a;
+		bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
+		assert(started);
+		a.truncate_reply_at = cut_at[i];
+
+		g_log[0] = 0;
+		sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, "secrets:pass:pass");
+		agent_stop(&a);
+
+		assert(err.code == SA_FAILED_INTERNAL);
+		assert(strstr(g_log, "ERR: socket closed after ") != NULL);
+	}
 }
 
 // The agent rejects the oversized request and closes the connection while it is still being written.
+// The 16 MB key is larger than the default stack, so this also checks the request is not built there.
 void test_request_write_failure_log()
 {
 	const char* prefix = "secrets:res:";
@@ -831,21 +855,7 @@ void test_request_write_failure_log()
 	bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
 	assert(started);
 
-	// the library builds the request on the stack
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);
-
-	fetch_job j = {
-		.port = a.port,
-		.path = path
-	};
-
-	pthread_t t;
-	int rv = pthread_create(&t, &attr, fetch_job_run, &j);
-	assert(rv == 0);
-	pthread_join(t, NULL);
-	pthread_attr_destroy(&attr);
+	sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, path);
 	agent_stop(&a);
 	free(path);
 
@@ -857,7 +867,7 @@ void test_request_write_failure_log()
 		"ERR: empty secret json response"
 	};
 
-	assert(j.err.code != SA_OK);
+	assert(err.code != SA_OK);
 	assert(!a.answered);
 	assert(strstr(g_log, "ERR: failed asking for secret\n") != NULL);
 	assert(strstr(g_log, "KKKK") == NULL);
@@ -1405,6 +1415,8 @@ int main(int argc, char const *argv[])
 	run_test(&test_sa_secret_get_bytes_bad_secret, "test_sa_secret_get_bytes_bad_secret");
 	run_test(&test_sa_secret_get_bytes_missing_resource_name, "test_sa_secret_get_bytes_missing_resource_name");
 	run_test(&test_request_resource_with_colons, "test_request_resource_with_colons");
+	run_test(&test_request_escaping, "test_request_escaping");
+	run_test(&test_truncated_reply, "test_truncated_reply");
 	run_test(&test_request_write_failure_log, "test_request_write_failure_log");
 	run_test(&test_sa_secret_get_bytes_tls, "test_sa_secret_get_bytes_tls");
 	run_test(&test_tls_ipv4_literal, "test_tls_ipv4_literal");
