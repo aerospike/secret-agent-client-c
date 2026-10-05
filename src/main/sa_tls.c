@@ -28,6 +28,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <stdbool.h>
+#include <string.h>
 #include <pthread.h>
 
 
@@ -338,23 +339,62 @@ create_context()
 	return ctx;
 }
 
+int
+sa_tls_peer_name(const char* host, char* buf, size_t buf_sz)
+{
+	size_t len = strlen(host);
+
+	if (len >= buf_sz) {
+		return -1;
+	}
+
+	memcpy(buf, host, len + 1);
+
+	struct in6_addr ip;
+	char* zone = strchr(buf, '%');
+
+	if (zone != NULL) {
+		*zone = '\0';
+
+		if (inet_pton(AF_INET6, buf, &ip) == 1) {
+			return 1;
+		}
+
+		*zone = '%';
+	}
+	else if (inet_pton(AF_INET, buf, &ip) == 1 || inet_pton(AF_INET6, buf, &ip) == 1) {
+		return 1;
+	}
+
+	if (len > 1 && buf[len - 1] == '.') {
+		buf[len - 1] = '\0';
+	}
+
+	return 0;
+}
+
 // IP literals must match an IP SAN, anything else is checked as a DNS name.
 static bool
 tls_set_peer_name(SSL* ssl, const char* host)
 {
-	struct in6_addr ip;
+	char name[SA_MAX_HOST_LEN];
+	int is_ip = sa_tls_peer_name(host, name, sizeof(name));
 
-	if (inet_pton(AF_INET, host, &ip) == 1 || inet_pton(AF_INET6, host, &ip) == 1) {
-		return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), host) == 1;
+	if (is_ip < 0) {
+		return false;
+	}
+
+	if (is_ip) {
+		return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), name) == 1;
 	}
 
 	SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
 
-	if (SSL_set1_host(ssl, host) != 1) {
+	if (SSL_set1_host(ssl, name) != 1) {
 		return false;
 	}
 
-	return SSL_set_tlsext_host_name(ssl, host) == 1;
+	return SSL_set_tlsext_host_name(ssl, name) == 1;
 }
 
 static void

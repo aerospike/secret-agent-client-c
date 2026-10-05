@@ -47,7 +47,6 @@
 
 #define SA_MAX_PORT 65535
 #define SA_MIN_PORT 1
-#define SA_MAX_HOST_LEN 256
 
 //==========================================================
 // Forward Declarations.

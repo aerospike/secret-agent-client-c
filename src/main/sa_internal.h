@@ -22,7 +22,10 @@
  * This header is not installed with the public headers.
 */
 
+#include <stddef.h>
 #include <stdint.h>
+
+#define SA_MAX_HOST_LEN 256
 
 /*
  * sa_deadline_ms returns the monotonic time in milliseconds
@@ -35,3 +38,11 @@ uint64_t sa_deadline_ms(int timeout_ms);
  * 0 once it has passed, or -1 if there is no deadline.
 */
 int sa_remaining_ms(uint64_t deadline_ms);
+
+/*
+ * sa_tls_peer_name copies host into buf in the form the certificate
+ * check needs: an IP literal without its IPv6 zone (fe80::1%lo0 becomes
+ * fe80::1), or a DNS name without one trailing dot.
+ * Returns 1 for an IP literal, 0 for a DNS name, or -1 if host does not fit.
+*/
+int sa_tls_peer_name(const char* host, char* buf, size_t buf_sz);

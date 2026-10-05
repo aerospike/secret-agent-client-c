@@ -17,11 +17,16 @@
 
 #include "sa_client.h"
 #include "sa_logging.h"
+#include "sa_secrets.h"
+#include "sa_tls.h"
+#include "../main/sa_internal.h"
 
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <net/if.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -56,6 +61,7 @@
 
 typedef struct fake_agent_s {
 	int fd;
+	int conn;
 	char port[8];
 	SSL_CTX* ctx;
 	const char* response;
@@ -111,41 +117,39 @@ char* readCertFile(const char* name)
 // Fake secret agent.
 //
 
+// ip may carry an IPv6 zone, such as fe80::1%lo0.
 static int
 listen_on(const char* ip, int backlog, char* port, size_t port_sz)
 {
-	struct sockaddr_storage ss;
-	struct sockaddr_in* v4 = (struct sockaddr_in*)&ss;
-	struct sockaddr_in6* v6 = (struct sockaddr_in6*)&ss;
-	socklen_t len;
+	struct addrinfo hints;
+	struct addrinfo* res;
 
-	memset(&ss, 0, sizeof(ss));
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_NUMERICHOST | AI_PASSIVE;
 
-	if (inet_pton(AF_INET, ip, &v4->sin_addr) == 1) {
-		v4->sin_family = AF_INET;
-		len = sizeof(*v4);
-	}
-	else if (inet_pton(AF_INET6, ip, &v6->sin6_addr) == 1) {
-		v6->sin6_family = AF_INET6;
-		len = sizeof(*v6);
-	}
-	else {
+	if (getaddrinfo(ip, "0", &hints, &res) != 0) {
 		return -1;
 	}
 
-	int fd = socket(ss.ss_family, SOCK_STREAM, 0);
+	struct sockaddr_storage ss;
+	socklen_t len = sizeof(ss);
+	int fd = socket(res->ai_family, SOCK_STREAM, 0);
+
+	if (fd >= 0 && (bind(fd, res->ai_addr, res->ai_addrlen) != 0 || listen(fd, backlog) != 0 ||
+			getsockname(fd, (struct sockaddr*)&ss, &len) != 0)) {
+		close(fd);
+		fd = -1;
+	}
+
+	freeaddrinfo(res);
 
 	if (fd < 0) {
 		return -1;
 	}
 
-	if (bind(fd, (struct sockaddr*)&ss, len) != 0 || listen(fd, backlog) != 0 ||
-			getsockname(fd, (struct sockaddr*)&ss, &len) != 0) {
-		close(fd);
-		return -1;
-	}
-
-	in_port_t p = ss.ss_family == AF_INET ? v4->sin_port : v6->sin6_port;
+	in_port_t p = ss.ss_family == AF_INET ? ((struct sockaddr_in*)&ss)->sin_port :
+			((struct sockaddr_in6*)&ss)->sin6_port;
 	snprintf(port, port_sz, "%d", ntohs(p));
 	return fd;
 }
@@ -215,19 +219,23 @@ static void*
 agent_serve(void* arg)
 {
 	fake_agent* a = (fake_agent*)arg;
-	struct pollfd pfd = {
-		.fd = a->fd,
-		.events = POLLIN
-	};
-
-	if (poll(&pfd, 1, 5000) != 1) {
-		return NULL;
-	}
-
-	int fd = accept(a->fd, NULL, NULL);
+	int fd = a->conn;
 
 	if (fd < 0) {
-		return NULL;
+		struct pollfd pfd = {
+			.fd = a->fd,
+			.events = POLLIN
+		};
+
+		if (poll(&pfd, 1, 5000) != 1) {
+			return NULL;
+		}
+
+		fd = accept(a->fd, NULL, NULL);
+
+		if (fd < 0) {
+			return NULL;
+		}
 	}
 
 	struct timeval tv = { .tv_sec = 5 };
@@ -273,6 +281,7 @@ static bool
 agent_start(fake_agent* a, const char* ip, const char* cert, const char* response)
 {
 	memset(a, 0, sizeof(fake_agent));
+	a->conn = -1;
 	a->response = response;
 	a->fd = listen_on(ip, 8, a->port, sizeof(a->port));
 
@@ -293,7 +302,11 @@ static void
 agent_stop(fake_agent* a)
 {
 	pthread_join(a->thread, NULL);
-	close(a->fd);
+
+	if (a->fd >= 0) {
+		close(a->fd);
+	}
+
 	SSL_CTX_free(a->ctx);
 }
 
@@ -523,6 +536,80 @@ tls_case(const char* listen_ip, const char* cert, const char* addr, const char* 
 
 	sa_err err = fetch(addr, a.port, ca_name, true, 3000, "secrets:pass:pass");
 	agent_stop(&a);
+
+	if (verify_err == X509_V_OK) {
+		assert(err.code == SA_OK);
+		assert(a.answered);
+		assert(!strcmp(expected_sni, a.sni));
+		return;
+	}
+
+	char line[256];
+	snprintf(line, sizeof(line), "ERR: SSL_connect certificate verify failed: %s (%ld)\n",
+			X509_verify_cert_error_string(verify_err), verify_err);
+
+	assert(err.code == SA_FAILED_INTERNAL);
+	assert(!a.answered);
+	assert(strstr(g_log, line) != NULL);
+}
+
+// Checks the agent's certificate against host over a socketpair, so host need not resolve.
+static sa_err
+handshake_as(const char* host, const char* cert, fake_agent* a)
+{
+	int sv[2];
+	int rv = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+	assert(rv == 0);
+
+	memset(a, 0, sizeof(fake_agent));
+	a->fd = -1;
+	a->conn = sv[1];
+	a->response = SECRET_RESPONSE;
+	a->ctx = agent_tls_ctx(cert);
+	rv = pthread_create(&a->thread, NULL, agent_serve, a);
+	assert(rv == 0);
+
+	sa_tls_cfg tls;
+	sa_tls_cfg_init(&tls);
+	tls.enabled = true;
+	tls.ca_string = readCertFile("ca");
+
+	sa_socket sock = {
+		.fd = sv[0],
+		.ssl = NULL,
+		.tls_cfg = &tls
+	};
+
+	fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL) | O_NONBLOCK);
+	sa_set_log_function(&mylog);
+	sa_init_openssl();
+
+	sa_err err;
+	err.code = SA_FAILED_INTERNAL;
+
+	if (sa_wrap_socket(&sock, host) == 0) {
+		err = sa_tls_connect(&sock, 2000);
+	}
+
+	if (err.code == SA_OK) {
+		char* resp = NULL;
+		err = sa_request_secret(&resp, &sock, "pass", 4, "pass", 4, 2000);
+		free(resp);
+	}
+
+	SSL_free(sock.ssl);
+	close(sv[0]);
+	agent_stop(a);
+	free(tls.ca_string);
+	return err;
+}
+
+static void
+handshake_case(const char* host, const char* cert, long verify_err, const char* expected_sni)
+{
+	fake_agent a;
+	g_log[0] = 0;
+	sa_err err = handshake_as(host, cert, &a);
 
 	if (verify_err == X509_V_OK) {
 		assert(err.code == SA_OK);
@@ -807,6 +894,80 @@ void test_read_eintr()
 	assert(g_signals > 5);
 }
 
+void test_peer_name_forms()
+{
+	struct {
+		const char* host;
+		int is_ip;
+		const char* name;
+	} cases[] = {
+		{ "localhost", 0, "localhost" },
+		{ "localhost.", 0, "localhost" },
+		{ "agent.example.test.", 0, "agent.example.test" },
+		{ "localhost..", 0, "localhost." },
+		{ ".", 0, "." },
+		{ "127.0.0.1", 1, "127.0.0.1" },
+		{ "::1", 1, "::1" },
+		{ "::ffff:127.0.0.1", 1, "::ffff:127.0.0.1" },
+		{ "fe80::1%lo0", 1, "fe80::1" },
+		{ "fe80::1%eth0", 1, "fe80::1" },
+		{ "127.0.0.1%lo", 0, "127.0.0.1%lo" },
+		{ "localhost%lo", 0, "localhost%lo" },
+	};
+
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		char name[SA_MAX_HOST_LEN];
+		int is_ip = sa_tls_peer_name(cases[i].host, name, sizeof(name));
+
+		printf("%s -> %d %s\n", cases[i].host, is_ip, name);
+		assert(is_ip == cases[i].is_ip);
+		assert(!strcmp(cases[i].name, name));
+	}
+
+	char name[4];
+	assert(sa_tls_peer_name("abcd", name, sizeof(name)) == -1);
+}
+
+void test_tls_trailing_dot()
+{
+	handshake_case("localhost.", "agent", X509_V_OK, "localhost");
+}
+
+void test_tls_scoped_ipv6()
+{
+	handshake_case("fe80::1%lo0", "agent", X509_V_OK, "");
+	handshake_case("fe80::1%lo0", "wrong-name", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+}
+
+// Needs fe80::1 on the loopback interface, which macOS has by default.
+void test_tls_scoped_ipv6_connect()
+{
+	char ifname[IF_NAMESIZE];
+	char ip[64];
+	char bracketed[64];
+	char port[8];
+
+	if (if_indextoname(1, ifname) == NULL) {
+		ifname[0] = '\0';
+	}
+
+	snprintf(ip, sizeof(ip), "fe80::1%%%s", ifname);
+	snprintf(bracketed, sizeof(bracketed), "[%s]", ip);
+
+	int lfd = listen_on(ip, 1, port, sizeof(port));
+
+	if (lfd < 0) {
+		printf("SKIPPED: cannot listen on %s\n", ip);
+		g_skipped = true;
+		return;
+	}
+
+	close(lfd);
+	tls_case(ip, "agent", ip, "ca", X509_V_OK, "");
+	tls_case(ip, "agent", bracketed, "ca", X509_V_OK, "");
+	tls_case(ip, "wrong-name", ip, "ca", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+}
+
 typedef void (*test_func)();
 
 void run_test(test_func f, char* name) {
@@ -841,6 +1002,10 @@ int main(int argc, char const *argv[])
 	run_test(&test_tls_no_ca, "test_tls_no_ca");
 	run_test(&test_tls_hostname_mismatch, "test_tls_hostname_mismatch");
 	run_test(&test_tls_ip_not_in_san, "test_tls_ip_not_in_san");
+	run_test(&test_peer_name_forms, "test_peer_name_forms");
+	run_test(&test_tls_trailing_dot, "test_tls_trailing_dot");
+	run_test(&test_tls_scoped_ipv6, "test_tls_scoped_ipv6");
+	run_test(&test_tls_scoped_ipv6_connect, "test_tls_scoped_ipv6_connect");
 	run_test(&test_connect_timeout_blackhole, "test_connect_timeout_blackhole");
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
