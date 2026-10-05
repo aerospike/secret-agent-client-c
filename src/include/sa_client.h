@@ -41,7 +41,11 @@ typedef struct sa_cfg_s
 {
 	char* addr; // address of the secret agent
 	char* port; // port the secret agent is running on
-	int timeout; // timeout in milliseconds
+	// timeout in milliseconds: one budget for connecting (TCP connect across all
+	// resolved addresses plus the TLS handshake), then a separate one for each wait
+	// while sending the request and reading the response.
+	// DNS resolution (getaddrinfo) is blocking and not covered.
+	int timeout;
 	sa_tls_cfg tls; // tls configuration
 } sa_cfg;
 

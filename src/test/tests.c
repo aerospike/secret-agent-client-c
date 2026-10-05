@@ -20,6 +20,8 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -35,6 +37,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SA_MAGIC 0x51dec1cc
@@ -44,6 +47,9 @@
 #define ERROR_RESPONSE "{\"Error\":\"fakesecret not present in file\"}"
 
 #define TEST_TIMEOUT_S 30
+#define CONNECT_TIMEOUT_MS 500
+#define TIMING_MARGIN_MS 300
+#define MAX_BACKLOG_FILL 64
 
 typedef struct fake_agent_s {
 	int fd;
@@ -323,6 +329,129 @@ fetch(const char* addr, const char* port, const char* ca_name, bool tls, int tim
 	return err;
 }
 
+static uint64_t
+now_ms()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+typedef struct blackhole_s {
+	const char* addr;
+	char port[8];
+	int lfd;
+	int fds[MAX_BACKLOG_FILL];
+	int n_fds;
+} blackhole;
+
+// Returns 1 if a non-blocking connect completes within wait_ms, 0 if it is still pending, -1 if it fails.
+static int
+connect_probe(const char* addr, const char* port, int wait_ms, int* fdp)
+{
+	struct sockaddr_in sin;
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons((uint16_t)atoi(port));
+	inet_pton(AF_INET, addr, &sin.sin_addr);
+
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	assert(fd >= 0);
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+	*fdp = fd;
+
+	if (connect(fd, (struct sockaddr*)&sin, sizeof(sin)) == 0) {
+		return 1;
+	}
+
+	if (errno != EINPROGRESS) {
+		return -1;
+	}
+
+	struct pollfd pfd = {
+		.fd = fd,
+		.events = POLLOUT
+	};
+
+	if (poll(&pfd, 1, wait_ms) == 0) {
+		return 0;
+	}
+
+	int so_err = 0;
+	socklen_t len = sizeof(so_err);
+	getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &len);
+
+	return so_err == 0 ? 1 : -1;
+}
+
+static void
+blackhole_stop(blackhole* b)
+{
+	for (int i = 0; i < b->n_fds; i++) {
+		close(b->fds[i]);
+	}
+
+	if (b->lfd >= 0) {
+		close(b->lfd);
+	}
+
+	b->n_fds = 0;
+	b->lfd = -1;
+}
+
+// Linux drops SYNs once a listener's accept queue is full. macOS resets instead,
+// but drops SYNs to 127.0.0.2, which it does not configure on lo0.
+static bool
+blackhole_start(blackhole* b)
+{
+	memset(b, 0, sizeof(blackhole));
+	b->addr = "127.0.0.1";
+	b->lfd = listen_on(b->addr, 1, b->port, sizeof(b->port));
+	assert(b->lfd >= 0);
+
+	while (b->n_fds < MAX_BACKLOG_FILL) {
+		int rv = connect_probe(b->addr, b->port, 200, &b->fds[b->n_fds++]);
+
+		if (rv == 0) {
+			return true;
+		}
+
+		if (rv < 0) {
+			break;
+		}
+	}
+
+	blackhole_stop(b);
+
+	const char* others[] = { "127.0.0.2", "192.0.2.1" };
+
+	for (size_t i = 0; i < sizeof(others) / sizeof(others[0]); i++) {
+		b->addr = others[i];
+		snprintf(b->port, sizeof(b->port), "3005");
+
+		int rv = connect_probe(b->addr, b->port, 200, &b->fds[b->n_fds++]);
+
+		if (rv == 0) {
+			return true;
+		}
+
+		blackhole_stop(b);
+	}
+
+	return false;
+}
+
+static void
+timed_fetch(const char* addr, const char* port, const char* ca_name, bool tls, int timeout,
+		sa_err* err, uint64_t* elapsed_ms)
+{
+	uint64_t start = now_ms();
+	*err = fetch(addr, port, ca_name, tls, timeout, "secrets:pass:pass");
+	*elapsed_ms = now_ms() - start;
+	printf("elapsed: %llu ms, code: %d\n", (unsigned long long)*elapsed_ms, err->code);
+}
+
 // verify_err is the X509_V_ERR_* the client must report, or X509_V_OK when it must succeed.
 static void
 tls_case(const char* listen_ip, const char* cert, const char* addr, const char* ca_name,
@@ -454,6 +583,81 @@ void test_tls_ip_not_in_san()
 	tls_case("127.0.0.1", "wrong-name", "127.0.0.1", "ca", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
 }
 
+void test_connect_timeout_blackhole()
+{
+	blackhole b;
+
+	if (!blackhole_start(&b)) {
+		printf("SKIPPED: no address that drops SYNs found\n");
+		g_skipped = true;
+		return;
+	}
+
+	printf("blackhole: %s:%s\n", b.addr, b.port);
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch(b.addr, b.port, NULL, false, CONNECT_TIMEOUT_MS, &err, &elapsed);
+
+	sa_err tls_err;
+	uint64_t tls_elapsed;
+	timed_fetch(b.addr, b.port, "ca", true, CONNECT_TIMEOUT_MS, &tls_err, &tls_elapsed);
+
+	blackhole_stop(&b);
+
+	assert(err.code == SA_FAILED_TIMEOUT && tls_err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+	assert(tls_elapsed >= CONNECT_TIMEOUT_MS - 10 && tls_elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+	assert(strstr(g_log, "ERR: connect timed out\n") != NULL);
+}
+
+// TEST-NET-1 is either blackholed or unreachable, depending on the network.
+void test_connect_unroutable_address()
+{
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("192.0.2.1", "3005", NULL, false, CONNECT_TIMEOUT_MS, &err, &elapsed);
+
+	assert(err.code == SA_FAILED_TIMEOUT || err.code == SA_FAILED_INTERNAL);
+	assert(elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+}
+
+void test_connect_refused_fails_fast()
+{
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 1, port, sizeof(port));
+	assert(lfd >= 0);
+	close(lfd);
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", port, NULL, false, 5000, &err, &elapsed);
+
+	char line[128];
+	snprintf(line, sizeof(line), "ERR: connect failed: -1, errno: %d\n", ECONNREFUSED);
+
+	assert(err.code == SA_FAILED_INTERNAL);
+	assert(elapsed < TIMING_MARGIN_MS);
+	assert(strstr(g_log, line) != NULL);
+}
+
+void test_tls_handshake_timeout()
+{
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 8, port, sizeof(port));
+	assert(lfd >= 0);
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", port, "ca", true, CONNECT_TIMEOUT_MS, &err, &elapsed);
+
+	close(lfd);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
+}
+
 typedef void (*test_func)();
 
 void run_test(test_func f, char* name) {
@@ -488,6 +692,10 @@ int main(int argc, char const *argv[])
 	run_test(&test_tls_no_ca, "test_tls_no_ca");
 	run_test(&test_tls_hostname_mismatch, "test_tls_hostname_mismatch");
 	run_test(&test_tls_ip_not_in_san, "test_tls_ip_not_in_san");
+	run_test(&test_connect_timeout_blackhole, "test_connect_timeout_blackhole");
+	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
+	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
+	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
 
 	printf("TESTS SUCCEEDED%s\n", g_skipped ? " (some skipped)" : "");
 

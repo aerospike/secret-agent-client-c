@@ -38,6 +38,7 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <time.h>
 
 //==========================================================
 // Typedefs & constants.
@@ -56,6 +57,9 @@ static sa_err _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int t
 static sa_err _write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 static int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
 static const char* strip_brackets(const char* addr, char* buf, size_t buf_sz);
+static int connect_nonblocking(const struct addrinfo* ai, uint64_t deadline_ms, int* fdp);
+static int wait_connected(int fd, uint64_t deadline_ms);
+static uint64_t now_ms();
 
 //==========================================================
 // Public API.
@@ -109,37 +113,38 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 		return err;
 	}
 
-	int sock_fd;
+	// one deadline covers connecting to every address and the tls handshake
+	uint64_t deadline_ms = sa_deadline_ms(timeout_ms);
+	int sock_fd = -1;
+	int conn_err = ENOTCONN;
+
 	// loop through all the results and connect to the first we can
-	for(p = host_info; p != NULL; p = p->ai_next) {
-		if ((sock_fd = socket(p->ai_family, p->ai_socktype,
-				p->ai_protocol)) == -1) {
-			continue;
+	for (p = host_info; p != NULL; p = p->ai_next) {
+		if (sa_remaining_ms(deadline_ms) == 0) {
+			conn_err = ETIMEDOUT;
+			break;
 		}
 
-		if (connect(sock_fd, p->ai_addr, p->ai_addrlen) == -1) {
-			close(sock_fd);
-			continue;
+		conn_err = connect_nonblocking(p, deadline_ms, &sock_fd);
+		if (conn_err == 0) {
+			break; // successfully connected
 		}
-
-		break; // successfully connected
-	}
-
-	if (p == NULL) {
-		// looped off the end of the list with no connection
-		sa_g_log_function("ERR: connect failed: %d, errno: %d", sock_fd, errno);
-		err.code = SA_FAILED_INTERNAL;
-		freeaddrinfo(host_info);
-		return err;
 	}
 
 	freeaddrinfo(host_info);
 
-	// mark the socket as non-blocking
-	int fcntl_res = fcntl(sock_fd, F_SETFL, O_NONBLOCK);
-	if (fcntl_res < 0) {
-		sa_g_log_function("ERR: could not set socket to non-blocking: %d", fcntl_res);
-		err.code = SA_FAILED_INTERNAL;
+	if (conn_err != 0) {
+		errno = conn_err; // log functions may report errno
+
+		if (conn_err == ETIMEDOUT) {
+			sa_g_log_function("ERR: connect timed out");
+			err.code = SA_FAILED_TIMEOUT;
+		}
+		else {
+			sa_g_log_function("ERR: connect failed: %d, errno: %d", sock_fd, errno);
+			err.code = SA_FAILED_INTERNAL;
+		}
+
 		return err;
 	}
 
@@ -148,6 +153,7 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 	if (sock == NULL) {
 		sa_g_log_function("ERR: could not allocate memory for sa_socket");
 		err.code = SA_FAILED_INTERNAL;
+		close(sock_fd);
 		return err;
 	}
 
@@ -167,7 +173,7 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 			return err;
 		}
 
-		err = sa_tls_connect(sock, timeout_ms);
+		err = sa_tls_connect(sock, sa_remaining_ms(deadline_ms));
 
 		if (err.code != SA_OK) {
 			sa_g_log_function("ERR: tls connection failed: %d", err.code);
@@ -229,6 +235,27 @@ sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res)
 	}
 
 	return err;
+}
+
+uint64_t
+sa_deadline_ms(int timeout_ms)
+{
+	if (timeout_ms < 0) {
+		return 0;
+	}
+
+	return now_ms() + (uint64_t)timeout_ms;
+}
+
+int
+sa_remaining_ms(uint64_t deadline_ms)
+{
+	if (deadline_ms == 0) {
+		return -1;
+	}
+
+	uint64_t now = now_ms();
+	return now >= deadline_ms ? 0 : (int)(deadline_ms - now);
 }
 
 sa_tls_cfg*
@@ -390,4 +417,78 @@ strip_brackets(const char* addr, char* buf, size_t buf_sz)
 	memcpy(buf, addr + 1, len - 2);
 	buf[len - 2] = '\0';
 	return buf;
+}
+
+/*
+ * connect_nonblocking connects a new non-blocking socket to ai,
+ * waiting no later than deadline_ms.
+ * SUCCESS: 0 is returned and fdp is set to the connected socket.
+ * FAILURE: an errno value is returned, ETIMEDOUT when the deadline passed.
+*/
+int
+connect_nonblocking(const struct addrinfo* ai, uint64_t deadline_ms, int* fdp)
+{
+	int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+	if (fd == -1) {
+		return errno;
+	}
+
+	int conn_err = 0;
+	int flags = fcntl(fd, F_GETFL);
+
+	if (flags == -1 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+		conn_err = errno;
+	}
+	else if (connect(fd, ai->ai_addr, ai->ai_addrlen) == -1) {
+		conn_err = errno == EINPROGRESS ? wait_connected(fd, deadline_ms) : errno;
+	}
+
+	if (conn_err != 0) {
+		close(fd);
+		return conn_err;
+	}
+
+	*fdp = fd;
+	return 0;
+}
+
+int
+wait_connected(int fd, uint64_t deadline_ms)
+{
+	struct pollfd pfd = {
+		.fd = fd,
+		.events = POLLOUT
+	};
+
+	int p_res;
+
+	do {
+		p_res = poll(&pfd, 1, sa_remaining_ms(deadline_ms));
+	} while (p_res == -1 && errno == EINTR);
+
+	if (p_res == 0) {
+		return ETIMEDOUT;
+	}
+
+	if (p_res == -1) {
+		return errno;
+	}
+
+	int so_err = 0;
+	socklen_t len = sizeof(so_err);
+
+	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &len) == -1) {
+		return errno;
+	}
+
+	return so_err;
+}
+
+uint64_t
+now_ms()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }

@@ -114,6 +114,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 {
 	sa_err err;
 	int rv;
+	uint64_t deadline_ms = sa_deadline_ms(timeout_ms);
 
 	while (true) {
 		err.code = SA_OK;
@@ -129,7 +130,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 		char errbuf[1024];
 		switch (sslerr) {
 		case SSL_ERROR_WANT_READ:
-			err = sa_socket_wait(sock, timeout_ms, true, &pollres);
+			err = sa_socket_wait(sock, sa_remaining_ms(deadline_ms), true, &pollres);
 			if (err.code != SA_OK) {
 				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
 				return err;
@@ -137,7 +138,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 			// loop back around and retry
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			err = sa_socket_wait(sock, timeout_ms, false, &pollres);
+			err = sa_socket_wait(sock, sa_remaining_ms(deadline_ms), false, &pollres);
 			if (err.code != SA_OK) {
 				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
 				return err;

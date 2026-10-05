@@ -20,6 +20,7 @@
 #include "sa_error.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <openssl/ssl.h>
 
@@ -51,6 +52,18 @@ sa_err sa_write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeo
  * ready to read or write.
 */
 sa_err sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res);
+
+/*
+ * sa_deadline_ms returns the monotonic time in milliseconds
+ * timeout_ms from now, or 0 (no deadline) if timeout_ms is negative.
+*/
+uint64_t sa_deadline_ms(int timeout_ms);
+
+/*
+ * sa_remaining_ms returns the milliseconds left before deadline_ms,
+ * 0 once it has passed, or -1 if there is no deadline.
+*/
+int sa_remaining_ms(uint64_t deadline_ms);
 
 sa_tls_cfg* sa_tls_cfg_init(sa_tls_cfg* cfg);
 

@@ -25,6 +25,15 @@ and the caller needs to null terminate them. Secrets are not automatically null 
 Logging is disabled by default but can be enabled by passing a
 pointer to a function of type `sa_log_func` to the `sa_set_log_function` function.
 
+### Timeouts
+`sa_cfg.timeout` is in milliseconds.
+
+- Connecting gets one budget of `timeout`. It covers the TCP connect, trying each address that
+  `addr` resolves to in turn while time remains, plus the TLS handshake.
+  An agent address that never answers fails with `SA_FAILED_TIMEOUT` after about `timeout`.
+- Each wait while sending the request and reading the response then gets its own `timeout`.
+- DNS resolution (`getaddrinfo`) is blocking and is not covered by the timeout.
+
 ## Examples
 Request a secret over TCP with logging.
 Log function.
