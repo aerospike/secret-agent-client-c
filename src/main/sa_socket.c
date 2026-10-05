@@ -294,7 +294,8 @@ _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 		}
 
 		if (bytes_read == 0) {
-			// end of transmission
+			sa_g_log_function("ERR: socket closed after %d of %u bytes", total_bytes_read, n);
+			err.code = SA_FAILED_INTERNAL;
 			return err;
 		}
 
