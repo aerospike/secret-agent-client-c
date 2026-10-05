@@ -1199,7 +1199,7 @@ typedef struct trickle_s {
 	pthread_t thread;
 } trickle;
 
-// Passes the client's bytes on at once, but the agent's 8 bytes every 3 ms.
+// Passes the client's bytes on at once, but the agent's 128 bytes every 40 ms.
 static void*
 trickle_serve(void* arg)
 {
@@ -1239,13 +1239,13 @@ trickle_serve(void* arg)
 			}
 
 			if (p[1].revents != 0) {
-				ssize_t n = read(u, buf, 8);
+				ssize_t n = read(u, buf, 128);
 
 				if (n <= 0) {
 					break;
 				}
 
-				usleep(3000);
+				usleep(40000);
 
 				if (write(c, buf, (size_t)n) != n) {
 					break;
