@@ -206,7 +206,12 @@ sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res)
 	};
 
 	nfds_t fd_count = 1;
-	int p_res = poll(&pfd, fd_count, (int)timeout_ms);
+	uint64_t deadline_ms = sa_deadline_ms(timeout_ms);
+	int p_res;
+
+	do {
+		p_res = poll(&pfd, fd_count, sa_remaining_ms(deadline_ms));
+	} while (p_res < 0 && errno == EINTR);
 
 	if (p_res == 0) {
 		sa_g_log_function("ERR: socket poll timed out");

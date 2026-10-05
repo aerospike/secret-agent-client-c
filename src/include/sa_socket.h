@@ -48,7 +48,8 @@ sa_err sa_write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeo
 
 /*
  * sa_socket_wait waits for a socket to be
- * ready to read or write.
+ * ready to read or write, for up to timeout_ms
+ * in total even if signals interrupt the wait.
 */
 sa_err sa_socket_wait(sa_socket* sock, int timeout_ms, bool read, short* poll_res);
 

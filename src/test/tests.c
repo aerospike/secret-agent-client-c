@@ -59,6 +59,7 @@ typedef struct fake_agent_s {
 	char port[8];
 	SSL_CTX* ctx;
 	const char* response;
+	int delay_ms;
 	char sni[256];
 	bool answered;
 	pthread_t thread;
@@ -198,6 +199,8 @@ agent_answer(fake_agent* a, int fd, SSL* ssl)
 	}
 
 	size_t len = strlen(a->response);
+
+	usleep((useconds_t)a->delay_ms * 1000);
 
 	header[0] = htonl(SA_MAGIC);
 	header[1] = htonl((uint32_t)len);
@@ -445,6 +448,56 @@ blackhole_start(blackhole* b)
 	return false;
 }
 
+static volatile sig_atomic_t g_kick;
+static volatile sig_atomic_t g_signals;
+static pthread_t g_kick_target;
+
+static void
+on_signal(int sig)
+{
+	(void)sig;
+	g_signals++;
+}
+
+static void*
+kicker(void* arg)
+{
+	(void)arg;
+
+	while (g_kick) {
+		pthread_kill(g_kick_target, SIGUSR1);
+		usleep(20000);
+	}
+
+	return NULL;
+}
+
+// Interrupts the calling thread with SIGUSR1 every 20 ms, without SA_RESTART.
+static void
+kicker_start(pthread_t* t, struct sigaction* old)
+{
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = on_signal;
+	sigaction(SIGUSR1, &sa, old);
+
+	g_kick_target = pthread_self();
+	g_signals = 0;
+	g_kick = 1;
+
+	int rv = pthread_create(t, NULL, kicker, NULL);
+	assert(rv == 0);
+}
+
+static void
+kicker_stop(pthread_t t, struct sigaction* old)
+{
+	g_kick = 0;
+	pthread_join(t, NULL);
+	sigaction(SIGUSR1, old, NULL);
+	printf("signals: %d\n", (int)g_signals);
+}
+
 static void
 timed_fetch(const char* addr, const char* port, const char* ca_name, bool tls, int timeout,
 		sa_err* err, uint64_t* elapsed_ms)
@@ -686,6 +739,74 @@ void test_bad_response_not_logged()
 	}
 }
 
+void test_connect_eintr()
+{
+	blackhole b;
+
+	if (!blackhole_start(&b)) {
+		printf("SKIPPED: no address that drops SYNs found\n");
+		g_skipped = true;
+		return;
+	}
+
+	pthread_t t;
+	struct sigaction old;
+	sa_err err;
+	uint64_t elapsed;
+
+	kicker_start(&t, &old);
+	timed_fetch(b.addr, b.port, NULL, false, CONNECT_TIMEOUT_MS, &err, &elapsed);
+	kicker_stop(t, &old);
+	blackhole_stop(&b);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+	assert(g_signals > 5);
+}
+
+void test_tls_handshake_eintr()
+{
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 8, port, sizeof(port));
+	assert(lfd >= 0);
+
+	pthread_t t;
+	struct sigaction old;
+	sa_err err;
+	uint64_t elapsed;
+
+	kicker_start(&t, &old);
+	timed_fetch("127.0.0.1", port, "ca", true, CONNECT_TIMEOUT_MS, &err, &elapsed);
+	kicker_stop(t, &old);
+	close(lfd);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
+	assert(g_signals > 5);
+}
+
+void test_read_eintr()
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", "agent", SECRET_RESPONSE);
+	assert(started);
+	a.delay_ms = 300;
+
+	pthread_t t;
+	struct sigaction old;
+	sa_err err;
+	uint64_t elapsed;
+
+	kicker_start(&t, &old);
+	timed_fetch("127.0.0.1", a.port, "ca", true, 2000, &err, &elapsed);
+	kicker_stop(t, &old);
+	agent_stop(&a);
+
+	assert(err.code == SA_OK);
+	assert(a.answered);
+	assert(g_signals > 5);
+}
+
 typedef void (*test_func)();
 
 void run_test(test_func f, char* name) {
@@ -725,6 +846,9 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
 	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
 	run_test(&test_bad_response_not_logged, "test_bad_response_not_logged");
+	run_test(&test_connect_eintr, "test_connect_eintr");
+	run_test(&test_tls_handshake_eintr, "test_tls_handshake_eintr");
+	run_test(&test_read_eintr, "test_read_eintr");
 
 	printf("TESTS SUCCEEDED%s\n", g_skipped ? " (some skipped)" : "");
 
