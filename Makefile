@@ -141,11 +141,19 @@ clean:
 	rm -rf $(TARGET)
 	rm -f $(TARGET_TEST)
 
+TEST_CERTS = $(TARGET_BASE)/test-certs
+
 .PHONY: test
 test: $(TARGET_TEST)
-	./src/test/tests
+	sh $(SOURCE_TEST)/gen-certs.sh $(TEST_CERTS)
+	./$(TARGET_TEST) $(TEST_CERTS)
 
 $(TARGET_TEST): all
-	#linux $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./$(TARGET_LIB) -l:libsecret-agent-client-c.a -lssl -lcrypto -ljansson -o $@
-	#mac $(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o $@
-	$(CC) $(TARGET_TEST).c -g -o0 -I./src/include -I/opt/homebrew/include -L./target/Darwin-arm64/lib/ -lsecret-agent-client-c -o $@
+	$(strip $(CC) $(TARGET_TEST).c -g -O0 \
+		$(addprefix -I, $(INC_PATH)) \
+		-o $@ \
+		$(CLIENT_STATIC) \
+		$(addprefix -L, $(LIB_PATH)) \
+		$(addprefix -l, $(LIBRARIES)) \
+		-lpthread \
+	)

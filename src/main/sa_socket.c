@@ -45,6 +45,7 @@
 
 #define SA_MAX_PORT 65535
 #define SA_MIN_PORT 1
+#define SA_MAX_HOST_LEN 256
 
 //==========================================================
 // Forward Declarations.
@@ -54,6 +55,7 @@ static sa_socket* sa_socket_init(sa_socket* sock);
 static sa_err _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 static sa_err _write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms);
 static int lookup_host(const char* hostname, const char* port, struct addrinfo** res);
+static const char* strip_brackets(const char* addr, char* buf, size_t buf_sz);
 
 //==========================================================
 // Public API.
@@ -96,8 +98,11 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 		return err;
 	}
 
+	char host_buf[SA_MAX_HOST_LEN];
+	const char* host = strip_brackets(addr, host_buf, sizeof(host_buf));
+
 	struct addrinfo *host_info, *p;
-	int lookup_res = lookup_host(addr, port, &host_info);
+	int lookup_res = lookup_host(host, port, &host_info);
 	if (lookup_res != 0) {
 		sa_g_log_function("ERR: failed to lookup address: %s", addr);
 		err.code = SA_FAILED_BAD_CONFIG;
@@ -152,7 +157,7 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 	sock->tls_cfg = tls_cfg;
 	if (tls_cfg->enabled) {
 		sa_init_openssl();
-		if (sa_wrap_socket(sock) < 0) {
+		if (sa_wrap_socket(sock, host) < 0) {
 			sa_g_log_function("ERR: failed to wrap socket for tls");
 			err.code = SA_FAILED_INTERNAL;
 
@@ -366,4 +371,23 @@ lookup_host(const char* hostname, const char* port, struct addrinfo** res)
 
 	int ret = getaddrinfo(hostname, port, &hints, res);
 	return ret;
+}
+
+/*
+ * strip_brackets returns addr without the brackets
+ * around an IPv6 literal such as [::1], copied into buf,
+ * or addr itself when it is not bracketed.
+*/
+const char*
+strip_brackets(const char* addr, char* buf, size_t buf_sz)
+{
+	size_t len = strlen(addr);
+
+	if (len < 2 || addr[0] != '[' || addr[len - 1] != ']' || len - 2 >= buf_sz) {
+		return addr;
+	}
+
+	memcpy(buf, addr + 1, len - 2);
+	buf[len - 2] = '\0';
+	return buf;
 }

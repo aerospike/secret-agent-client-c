@@ -71,6 +71,8 @@ Main.
 ```
 
 Request a secret over TCP with TLS and logging.
+The agent's certificate must cover `addr`, here with an `IP:127.0.0.1` subject alternative name.
+See [TLS certificate verification](#tls-certificate-verification).
 ```c
     const char* addr = "127.0.0.1";
     const char* port = "3005";
@@ -86,6 +88,7 @@ Request a secret over TCP with TLS and logging.
     cfg.port = port;
     cfg.timeout = 3000;
     cfg.tls.ca_string = cacert;
+    cfg.tls.enabled = true;
 
     sa_client c;
     sa_client_init(&c, &cfg);
@@ -106,7 +109,45 @@ Request a secret over TCP with TLS and logging.
     free(secret);
 ```
 
+## TLS certificate verification
+When `tls.enabled` is set, the client verifies the Secret Agent's certificate during the
+TLS handshake and fails the request if verification fails.
+
+- The certificate must chain to a CA in `tls.ca_string`. The system trust store is not used,
+  so a TLS client without `tls.ca_string` always fails.
+- The certificate must cover `addr`, the address the client connects to.
+  A host name is matched against the certificate's DNS names.
+  An IPv4 or IPv6 literal, with or without brackets (`::1` or `[::1]`), must match an IP address
+  subject alternative name.
+- The host name is sent as SNI. IP literals are not.
+
+On failure the reason, for example `hostname mismatch`, `IP address mismatch` or
+`unable to get local issuer certificate`, is logged through the log function.
+
+**_Breaking change:_** earlier versions did not verify the agent's certificate at all,
+so any certificate was accepted. Clients that connect by an address the certificate does not
+cover, such as `0.0.0.0` with a certificate issued for `localhost`, now fail with
+`SA_FAILED_INTERNAL`. Connect using a name or IP address listed in the certificate, or reissue
+the certificate with a matching subject alternative name. Verification cannot be turned off.
+
 ## Testing
-Testing requires that the Aerospike Secret Agent is running on the host machine at 0.0.0.0:3005
-and another secret agent configured for TLS at 0.0.0.0:3006.
-If you need to change this address you can edit the src/test/tests.c file to point to a different endpoint.
+`make test` builds the library and `src/test/tests`, generates throwaway certificates into
+`target/<platform>/test-certs` with `src/test/gen-certs.sh`, and runs the tests.
+
+The tests start an in-process fake Secret Agent (plain TCP and TLS) on the loopback interface,
+so no real agent or network access is needed. The IPv6 cases are skipped when `::1` is unavailable.
+
+Requirements: a C compiler, make, jansson, and OpenSSL including the `openssl` command line tool.
+On macOS the Makefile uses Homebrew under `/opt/homebrew`.
+
+To run the tests on Linux in Docker from the repository root:
+```sh
+docker run --rm -v "$PWD":/src:ro ubuntu:24.04 sh -c '
+apt-get update && apt-get install -y build-essential libssl-dev libjansson-dev openssl &&
+cp -r /src /build && cd /build && rm -rf target src/test/tests && make test'
+
+docker run --rm -v "$PWD":/src:ro rockylinux:8 sh -c '
+dnf install -y dnf-plugins-core && dnf config-manager --set-enabled powertools &&
+dnf install -y gcc make openssl openssl-devel jansson-devel &&
+cp -r /src /build && cd /build && rm -rf target src/test/tests && make test'
+```
