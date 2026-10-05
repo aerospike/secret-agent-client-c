@@ -46,6 +46,9 @@
 #define SECRET_RESPONSE "{\"SecretValue\":\"MTI3LjAuMC4x\"}"
 #define ERROR_RESPONSE "{\"Error\":\"fakesecret not present in file\"}"
 
+#define LEAK_SECRET "s3cr3t-value"
+#define LEAK_SECRET_B64 "czNjcjN0LXZhbHVl"
+
 #define TEST_TIMEOUT_S 30
 #define CONNECT_TIMEOUT_MS 500
 #define TIMING_MARGIN_MS 300
@@ -658,6 +661,31 @@ void test_tls_handshake_timeout()
 	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
 }
 
+void test_bad_response_not_logged()
+{
+	const char* responses[] = {
+		"{\"SecretValue\":\"" LEAK_SECRET_B64,
+		"{\"SecretValue\":\"" LEAK_SECRET_B64 "\\q\"}",
+		"\"" LEAK_SECRET_B64 "\"",
+	};
+
+	for (size_t i = 0; i < sizeof(responses) / sizeof(responses[0]); i++) {
+		fake_agent a;
+		bool started = agent_start(&a, "127.0.0.1", NULL, responses[i]);
+		assert(started);
+
+		g_log[0] = 0;
+		sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, "secrets:pass:pass");
+		agent_stop(&a);
+
+		assert(err.code == SA_FAILED_BAD_REQUEST);
+		assert(strstr(g_log, "ERR: failed to parse response JSON line") != NULL);
+		assert(strstr(g_log, "czNjcjN0") == NULL);
+		assert(strstr(g_log, LEAK_SECRET_B64) == NULL);
+		assert(strstr(g_log, LEAK_SECRET) == NULL);
+	}
+}
+
 typedef void (*test_func)();
 
 void run_test(test_func f, char* name) {
@@ -696,6 +724,7 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
 	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
+	run_test(&test_bad_response_not_logged, "test_bad_response_not_logged");
 
 	printf("TESTS SUCCEEDED%s\n", g_skipped ? " (some skipped)" : "");
 

@@ -24,6 +24,8 @@ and the caller needs to null terminate them. Secrets are not automatically null 
 
 Logging is disabled by default but can be enabled by passing a
 pointer to a function of type `sa_log_func` to the `sa_set_log_function` function.
+Log lines do not include request or response bytes, except the error message the agent returns
+in its `Error` field.
 
 ### Timeouts
 `sa_cfg.timeout` is in milliseconds.
