@@ -24,6 +24,14 @@ and the caller needs to null terminate them. Secrets are not automatically null 
 
 Logging is disabled by default but can be enabled by passing a
 pointer to a function of type `sa_log_func` to the `sa_set_log_function` function.
+Log lines do not include request or response bytes, except the error message the agent returns
+in its `Error` field.
+
+### Timeouts
+`sa_cfg.timeout` is in milliseconds. The TCP connect, across every address `addr` resolves to,
+must finish within `timeout` or fails with `SA_FAILED_TIMEOUT`. After that, each wait during the
+TLS handshake, the request and the response gets its own `timeout`. DNS resolution is not covered.
+`0` fails at once and a negative value means no limit.
 
 ## Examples
 Request a secret over TCP with logging.
@@ -71,6 +79,8 @@ Main.
 ```
 
 Request a secret over TCP with TLS and logging.
+The agent's certificate must cover `addr`, here with an `IP:127.0.0.1` subject alternative name.
+See [TLS certificate verification](#tls-certificate-verification).
 ```c
     const char* addr = "127.0.0.1";
     const char* port = "3005";
@@ -86,6 +96,7 @@ Request a secret over TCP with TLS and logging.
     cfg.port = port;
     cfg.timeout = 3000;
     cfg.tls.ca_string = cacert;
+    cfg.tls.enabled = true;
 
     sa_client c;
     sa_client_init(&c, &cfg);
@@ -106,7 +117,42 @@ Request a secret over TCP with TLS and logging.
     free(secret);
 ```
 
+## TLS certificate verification
+When `tls.enabled` is set, the agent's certificate must chain to a CA in `tls.ca_string`
+(the system trust store is not used) and must cover `addr`:
+
+- An IPv4 or IPv6 literal must match an IP address subject alternative name.
+- Anything else is a host name, matched exactly against the certificate's DNS names and sent as SNI.
+  Partial wildcards such as `a*.example.com` do not match.
+- Bracketed (`[::1]`), scoped (`fe80::1%lo0`) and trailing-dot (`localhost.`) forms are not supported.
+
+The reason for a failure, such as `hostname mismatch`, is logged through the log function.
+
+**_Breaking change:_** earlier versions accepted any certificate. Setups that relied on that, for
+example connecting to `0.0.0.0` with a certificate issued for `localhost`, or passing a CA that did
+not issue the agent's certificate, now fail with `SA_FAILED_INTERNAL`. Verification cannot be turned off.
+
 ## Testing
-Testing requires that the Aerospike Secret Agent is running on the host machine at 0.0.0.0:3005
-and another secret agent configured for TLS at 0.0.0.0:3006.
-If you need to change this address you can edit the src/test/tests.c file to point to a different endpoint.
+`make test` builds the library and `src/test/tests`, generates throwaway certificates into
+`target/<platform>/test-certs` with `src/test/gen-certs.sh`, and runs the tests.
+
+The tests start an in-process fake Secret Agent (plain TCP and TLS) on the loopback interface,
+so no real agent or network access is needed. The IPv6 cases are skipped when `::1` is unavailable,
+and the end-to-end scoped IPv6 case when the loopback interface has no `fe80::1` (macOS has it,
+Linux usually does not). The test binary wraps `socket()` to slow down connecting, which works
+because the library is linked into it statically.
+
+Requirements: a C compiler, make, jansson, and OpenSSL including the `openssl` command line tool.
+On macOS the Makefile uses Homebrew under `/opt/homebrew`.
+
+To run the tests on Linux in Docker from the repository root:
+```sh
+docker run --rm -v "$PWD":/src:ro ubuntu:24.04 sh -c '
+apt-get update && apt-get install -y build-essential libssl-dev libjansson-dev openssl &&
+cp -r /src /build && cd /build && rm -rf target src/test/tests && make test'
+
+docker run --rm -v "$PWD":/src:ro rockylinux/rockylinux:8 sh -c '
+dnf install -y dnf-plugins-core && dnf config-manager --set-enabled powertools &&
+dnf install -y gcc make openssl openssl-devel jansson-devel &&
+cp -r /src /build && cd /build && rm -rf target src/test/tests && make test'
+```

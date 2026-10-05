@@ -87,7 +87,7 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 
 	err = sa_write_n_bytes(sock, SA_HEADER_SIZE + json_sz, req, timeout_ms);
 	if (err.code != SA_OK) {
-		sa_g_log_function("ERR: failed asking for secret - %s", req);
+		sa_g_log_function("ERR: failed asking for secret");
 		return err;
 	}
 
@@ -102,7 +102,7 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 	uint32_t recv_magic = ntohl(*(uint32_t*)&header[0]);
 
 	if (recv_magic != SA_MAGIC) {
-		sa_g_log_function("ERR: bad magic - %x", recv_magic);
+		sa_g_log_function("ERR: bad magic");
 		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
@@ -110,7 +110,7 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 	uint32_t recv_json_sz = ntohl(*(uint32_t*)&header[4]);
 
 	if (recv_json_sz > SA_MAX_RECV_JSON_SIZE) {
-		sa_g_log_function("ERR: response too big - %d", recv_json_sz);
+		sa_g_log_function("ERR: response too big");
 		err.code = SA_FAILED_INTERNAL;
 		return err;
 	}
@@ -141,8 +141,9 @@ sa_parse_json(const char* json_buf, size_t* size_r)
 	json_t* doc = json_loads(json_buf, 0, &err);
 
 	if (doc == NULL) {
-		sa_g_log_function("ERR: failed to parse response JSON line %d (%s)",
-				err.line, err.text);
+		// err.text can quote the response, which may hold the secret
+		sa_g_log_function("ERR: failed to parse response JSON line %d, column %d, position %d",
+				err.line, err.column, err.position);
 		return NULL;
 	}
 
