@@ -1,0 +1,70 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: make test (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-24.04, OpenSSL 3
+            container: ""
+          - name: rockylinux 8, OpenSSL 1.1.1
+            container: rockylinux:8
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        if: matrix.container == ''
+        uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
+        with:
+          egress-policy: audit
+
+      - name: Install build dependencies (ubuntu)
+        if: matrix.container == ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libjansson-dev openssl
+
+      - name: Install build dependencies (rockylinux 8)
+        if: matrix.container == 'rockylinux:8'
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled powertools
+          dnf install -y gcc make openssl openssl-devel jansson-devel
+
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Add fe80::1 to loopback for the scoped IPv6 test
+        if: matrix.container == ''
+        run: sudo ip -6 addr add fe80::1/64 dev lo
+
+      - name: make test
+        run: make test
+
+  macos:
+    name: make test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Install build dependencies
+        run: |
+          brew install jansson openssl@3
+          echo "CPATH=$(brew --prefix openssl@3)/include:$(brew --prefix jansson)/include" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$(brew --prefix openssl@3)/lib:$(brew --prefix jansson)/lib" >> "$GITHUB_ENV"
+
+      - name: make test
+        run: make test
