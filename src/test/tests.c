@@ -1115,6 +1115,16 @@ void test_tls_trailing_dot()
 	handshake_case("localhost.", "agent", X509_V_OK, "localhost");
 	handshake_case("127.0.0.1.", "agent", X509_V_OK, "");
 	handshake_case("127.0.0.1.", "wrong-name", X509_V_ERR_IP_ADDRESS_MISMATCH, NULL);
+
+	// "127.0.0.1." is not numeric to getaddrinfo, so resolving it depends on DNS.
+	struct addrinfo* res;
+
+	if (getaddrinfo("127.0.0.1.", NULL, NULL, &res) != 0) {
+		skip("the resolver does not resolve 127.0.0.1.");
+		return;
+	}
+
+	freeaddrinfo(res);
 	tls_case("127.0.0.1", "agent", "127.0.0.1.", "ca", X509_V_OK, "");
 }
 
