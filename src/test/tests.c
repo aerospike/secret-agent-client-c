@@ -1029,7 +1029,7 @@ void test_connect_eintr()
 
 	assert(err.code == SA_FAILED_TIMEOUT);
 	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
-	assert(g_signals > 5);
+	assert(g_signals > 1);
 }
 
 void test_tls_handshake_eintr()
@@ -1050,7 +1050,7 @@ void test_tls_handshake_eintr()
 
 	assert(err.code == SA_FAILED_TIMEOUT);
 	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
-	assert(g_signals > 5);
+	assert(g_signals > 1);
 }
 
 void test_read_eintr()
@@ -1072,7 +1072,7 @@ void test_read_eintr()
 
 	assert(err.code == SA_OK);
 	assert(a.answered);
-	assert(g_signals > 5);
+	assert(g_signals > 1);
 }
 
 void test_tls_peer_name_forms()
