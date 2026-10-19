@@ -24,8 +24,8 @@
 #include <openssl/ssl.h>
 
 typedef struct sa_tls_cfg_s {
-	char* ca_string;
-	bool enabled;
+	char* ca_string; // PEM CA certificates, including the root, the agent's certificate must chain to
+	bool enabled; // requires ca_string, the system trust store is not used (see README)
 } sa_tls_cfg;
 
 typedef struct sa_socket_s {

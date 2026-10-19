@@ -41,7 +41,7 @@ typedef struct sa_cfg_s
 {
 	char* addr; // address of the secret agent
 	char* port; // port the secret agent is running on
-	int timeout; // timeout in milliseconds
+	int timeout; // timeout in milliseconds, 0 fails at once, negative means no limit (see README)
 	sa_tls_cfg tls; // tls configuration
 } sa_cfg;
 
