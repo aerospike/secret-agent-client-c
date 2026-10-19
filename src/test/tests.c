@@ -1166,6 +1166,18 @@ void test_tls_partial_wildcard()
 	handshake_case("ab.example.test", "partial", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
 }
 
+// glibc dials 010.0.0.1 as 8.0.0.1, so a certificate for 10.0.0.1 must not match it.
+void test_tls_octal_ipv4()
+{
+	handshake_case("10.0.0.1", "ip-only", X509_V_OK, "");
+
+	fake_agent a;
+	sa_err err = handshake_as("010.0.0.1", "ip-only", &a);
+
+	assert(err.code == SA_FAILED_INTERNAL);
+	assert(!a.answered);
+}
+
 void test_tls_ignores_system_trust_store()
 {
 	char ca_file[1024];
@@ -1419,6 +1431,7 @@ int main(int argc, char const *argv[])
 	run_test(&test_tls_scoped_ipv6, "test_tls_scoped_ipv6");
 	run_test(&test_tls_scoped_ipv6_connect, "test_tls_scoped_ipv6_connect");
 	run_test(&test_tls_partial_wildcard, "test_tls_partial_wildcard");
+	run_test(&test_tls_octal_ipv4, "test_tls_octal_ipv4");
 	run_test(&test_tls_ignores_system_trust_store, "test_tls_ignores_system_trust_store");
 	run_test(&test_connect_timeout_blackhole, "test_connect_timeout_blackhole");
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");

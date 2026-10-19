@@ -347,7 +347,7 @@ tls_set_peer_name(SSL* ssl, const char* host)
 
 	SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
 
-	return SSL_set1_host(ssl, host) == 1 && SSL_set_tlsext_host_name(ssl, host) == 1;
+	return X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host, 0) == 1 && SSL_set_tlsext_host_name(ssl, host) == 1;
 }
 
 static void
