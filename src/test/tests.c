@@ -966,6 +966,46 @@ void test_connect_refused_fails_fast()
 	assert(strstr(g_log, line) != NULL);
 }
 
+// The deadline passes while the first address is refused, so the others are never tried.
+void test_connect_deadline_after_refused()
+{
+	struct addrinfo hints;
+	struct addrinfo* res;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	if (getaddrinfo("localhost", NULL, &hints, &res) != 0) {
+		skip("localhost does not resolve");
+		return;
+	}
+
+	bool several = res->ai_next != NULL;
+	freeaddrinfo(res);
+
+	if (!several) {
+		skip("localhost resolves to one address");
+		return;
+	}
+
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 1, port, sizeof(port));
+	assert(lfd >= 0);
+	close(lfd);
+
+	sa_err err;
+	uint64_t elapsed;
+
+	g_delayed_sockets = 0;
+	g_socket_delay_ms = 300;
+	timed_fetch("localhost", port, NULL, false, 200, &err, &elapsed);
+	g_socket_delay_ms = 0;
+
+	assert(g_delayed_sockets == 1);
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(strstr(g_log, "ERR: connect timed out\n") != NULL);
+}
+
 void test_tls_handshake_timeout()
 {
 	char port[8];
@@ -1474,6 +1514,7 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_timeout_blackhole, "test_connect_timeout_blackhole");
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
+	run_test(&test_connect_deadline_after_refused, "test_connect_deadline_after_refused");
 	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
 	run_test(&test_read_timeout_log, "test_read_timeout_log");
 	run_test(&test_bad_response_not_logged, "test_bad_response_not_logged");

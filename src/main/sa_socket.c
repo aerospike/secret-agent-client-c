@@ -122,9 +122,10 @@ sa_connect_addr_port(sa_socket** sockp, const char* addr, const char* port, sa_t
 		}
 	}
 
+	bool timed_out = conn_err == ETIMEDOUT || (conn_err != 0 && p != NULL);
 	freeaddrinfo(host_info);
 
-	if (conn_err == ETIMEDOUT) {
+	if (timed_out) {
 		sa_g_log_function("ERR: connect timed out");
 		err.code = SA_FAILED_TIMEOUT;
 		return err;
