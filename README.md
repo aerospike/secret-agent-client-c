@@ -29,7 +29,8 @@ in its `Error` field.
 
 ### Timeouts
 `sa_cfg.timeout` is in milliseconds. The TCP connect, across every address `addr` resolves to,
-must finish within `timeout` or fails with `SA_FAILED_TIMEOUT`. After that, each wait during the
+must finish within `timeout` or fails with `SA_FAILED_TIMEOUT`. Addresses are tried in order, so one
+that does not answer can use the whole `timeout` and leave the rest untried. After that, each wait during the
 TLS handshake, the request and the response gets its own `timeout`. DNS resolution is not covered.
 `0` fails at once and a negative value means no limit.
 
@@ -119,12 +120,16 @@ See [TLS certificate verification](#tls-certificate-verification).
 
 ## TLS certificate verification
 When `tls.enabled` is set, the agent's certificate must chain to a CA in `tls.ca_string`
-(the system trust store is not used) and must cover `addr`:
+(the system trust store is not used) and must cover `addr`. `tls.ca_string` must include the root CA,
+an intermediate alone is not enough.
 
-- An IPv4 or IPv6 literal must match an IP address subject alternative name.
-- Anything else is a host name, matched exactly against the certificate's DNS names and sent as SNI.
-  Partial wildcards such as `a*.example.com` do not match.
-- Bracketed (`[::1]`), scoped (`fe80::1%lo0`) and trailing-dot (`localhost.`) forms are not supported.
+- An IPv4 or IPv6 literal must match an IP address subject alternative name. An IPv4-mapped
+  address such as `::ffff:127.0.0.1` is checked as that IPv6 address, so it does not match `IP:127.0.0.1`.
+- Anything else is a host name, matched against the certificate's DNS names, or its subject common
+  name when it has none, and sent as SNI. A wildcard matches a whole leftmost label (`*.example.com`)
+  but not part of one (`a*.example.com`).
+- Bracketed (`[::1]`), scoped (`fe80::1%lo0`) and trailing-dot (`localhost.`) forms are not supported,
+  nor are shorthand or zero-padded IPv4 forms such as `127.1`, `0x7f.0.0.1` or `010.0.0.1`.
 
 The reason for a failure, such as `hostname mismatch`, is logged through the log function.
 
@@ -143,7 +148,13 @@ Linux usually does not). The test binary wraps `socket()` to slow down connectin
 because the library is linked into it statically.
 
 Requirements: a C compiler, make, jansson, and OpenSSL including the `openssl` command line tool.
-On macOS the Makefile uses Homebrew under `/opt/homebrew`.
+On macOS the Makefile uses Homebrew under `/opt/homebrew`. Homebrew's `openssl@3` is keg-only,
+so point the compiler at it:
+```sh
+brew install jansson openssl@3
+export CPATH="$(brew --prefix openssl@3)/include" LIBRARY_PATH="$(brew --prefix openssl@3)/lib"
+make test
+```
 
 To run the tests on Linux in Docker from the repository root:
 ```sh

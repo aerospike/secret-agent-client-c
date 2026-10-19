@@ -976,6 +976,81 @@ void test_connect_refused_fails_fast()
 	assert(strstr(g_log, line) != NULL);
 }
 
+// The deadline passes while the first address is refused, so the others are never tried.
+void test_connect_deadline_after_refused()
+{
+	struct addrinfo hints;
+	struct addrinfo* res;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	if (getaddrinfo("localhost", NULL, &hints, &res) != 0) {
+		skip("localhost does not resolve");
+		return;
+	}
+
+	bool several = res->ai_next != NULL;
+	freeaddrinfo(res);
+
+	if (!several) {
+		skip("localhost resolves to one address");
+		return;
+	}
+
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 1, port, sizeof(port));
+	assert(lfd >= 0);
+	close(lfd);
+
+	sa_err err;
+	uint64_t elapsed;
+
+	g_delayed_sockets = 0;
+	g_socket_delay_ms = 300;
+	timed_fetch("localhost", port, NULL, false, 200, &err, &elapsed);
+	g_socket_delay_ms = 0;
+
+	assert(g_delayed_sockets == 1);
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(strstr(g_log, "ERR: connect timed out\n") != NULL);
+}
+
+// 0 leaves no time to dial, so a refused port still reports a timeout.
+void test_zero_timeout()
+{
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 1, port, sizeof(port));
+	assert(lfd >= 0);
+	close(lfd);
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", port, NULL, false, 0, &err, &elapsed);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed < TIMING_MARGIN_MS);
+	assert(strstr(g_log, "ERR: connect timed out\n") != NULL);
+}
+
+// The agent answers after the 1000 ms default, so a negative timeout must mean no limit.
+void test_negative_timeout()
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", "agent", SECRET_RESPONSE);
+	assert(started);
+	a.delay_ms = 1200;
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", a.port, "ca", true, -1, &err, &elapsed);
+	agent_stop(&a);
+
+	assert(err.code == SA_OK);
+	assert(a.answered);
+	assert(elapsed >= 1200);
+}
+
 void test_tls_handshake_timeout()
 {
 	char port[8];
@@ -988,9 +1063,47 @@ void test_tls_handshake_timeout()
 
 	close(lfd);
 
+	const char* const expected[] = {
+		"ERR: socket poll timed out",
+		"ERR: socket poll failed on tls connect, return value: 4, revent: 0",
+		"ERR: tls connection failed: 4",
+		"ERR: failed to create socket"
+	};
+
 	assert(err.code == SA_FAILED_TIMEOUT);
 	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
-	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
+	assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
+}
+
+// A poll timeout sets no errno, so the lines logged after it must not print one.
+static void
+read_timeout_case(const char* cert, const char* poll_line)
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", cert, SECRET_RESPONSE);
+	assert(started);
+	a.delay_ms = 600;
+
+	g_log[0] = 0;
+	sa_err err = fetch("127.0.0.1", a.port, cert != NULL ? "ca" : NULL, cert != NULL, 200,
+			"secrets:pass:pass");
+	agent_stop(&a);
+
+	const char* const expected[] = {
+		"ERR: socket poll timed out",
+		poll_line,
+		"ERR: failed reading secret header",
+		"ERR: empty secret json response"
+	};
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
+}
+
+void test_read_timeout_log()
+{
+	read_timeout_case(NULL, "ERR: socket poll failed on read, return value: 4, revent: 0");
+	read_timeout_case("agent", "ERR: socket poll failed on tls read, return value: 4, revent: 0");
 }
 
 void test_bad_response_not_logged()
@@ -1174,6 +1287,18 @@ void test_tls_scoped_ipv6_connect()
 void test_tls_partial_wildcard()
 {
 	handshake_case("ab.example.test", "partial", X509_V_ERR_HOSTNAME_MISMATCH, NULL);
+}
+
+// glibc dials 010.0.0.1 as 8.0.0.1, so a certificate for 10.0.0.1 must not match it.
+void test_tls_octal_ipv4()
+{
+	handshake_case("10.0.0.1", "ip-only", X509_V_OK, "");
+
+	fake_agent a;
+	sa_err err = handshake_as("010.0.0.1", "ip-only", &a);
+
+	assert(err.code == SA_FAILED_INTERNAL);
+	assert(!a.answered);
 }
 
 void test_tls_ignores_system_trust_store()
@@ -1431,11 +1556,16 @@ int main(int argc, char const *argv[])
 	run_test(&test_tls_scoped_ipv6, "test_tls_scoped_ipv6");
 	run_test(&test_tls_scoped_ipv6_connect, "test_tls_scoped_ipv6_connect");
 	run_test(&test_tls_partial_wildcard, "test_tls_partial_wildcard");
+	run_test(&test_tls_octal_ipv4, "test_tls_octal_ipv4");
 	run_test(&test_tls_ignores_system_trust_store, "test_tls_ignores_system_trust_store");
 	run_test(&test_connect_timeout_blackhole, "test_connect_timeout_blackhole");
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
+	run_test(&test_connect_deadline_after_refused, "test_connect_deadline_after_refused");
+	run_test(&test_zero_timeout, "test_zero_timeout");
+	run_test(&test_negative_timeout, "test_negative_timeout");
 	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
+	run_test(&test_read_timeout_log, "test_read_timeout_log");
 	run_test(&test_bad_response_not_logged, "test_bad_response_not_logged");
 	run_test(&test_connect_eintr, "test_connect_eintr");
 	run_test(&test_tls_handshake_eintr, "test_tls_handshake_eintr");
