@@ -978,9 +978,47 @@ void test_tls_handshake_timeout()
 
 	close(lfd);
 
+	const char* const expected[] = {
+		"ERR: socket poll timed out",
+		"ERR: socket poll failed on tls connect, return value: 4, revent: 0",
+		"ERR: tls connection failed: 4",
+		"ERR: failed to create socket"
+	};
+
 	assert(err.code == SA_FAILED_TIMEOUT);
 	assert(elapsed >= CONNECT_TIMEOUT_MS - 10 && elapsed < CONNECT_TIMEOUT_MS + TIMING_MARGIN_MS);
-	assert(strstr(g_log, "ERR: socket poll timed out\n") != NULL);
+	assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
+}
+
+// A poll timeout sets no errno, so the lines logged after it must not print one.
+static void
+read_timeout_case(const char* cert, const char* poll_line)
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", cert, SECRET_RESPONSE);
+	assert(started);
+	a.delay_ms = 600;
+
+	g_log[0] = 0;
+	sa_err err = fetch("127.0.0.1", a.port, cert != NULL ? "ca" : NULL, cert != NULL, 200,
+			"secrets:pass:pass");
+	agent_stop(&a);
+
+	const char* const expected[] = {
+		"ERR: socket poll timed out",
+		poll_line,
+		"ERR: failed reading secret header",
+		"ERR: empty secret json response"
+	};
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
+}
+
+void test_read_timeout_log()
+{
+	read_timeout_case(NULL, "ERR: socket poll failed on read, return value: 4, revent: 0");
+	read_timeout_case("agent", "ERR: socket poll failed on tls read, return value: 4, revent: 0");
 }
 
 void test_bad_response_not_logged()
@@ -1437,6 +1475,7 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
 	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
+	run_test(&test_read_timeout_log, "test_read_timeout_log");
 	run_test(&test_bad_response_not_logged, "test_bad_response_not_logged");
 	run_test(&test_connect_eintr, "test_connect_eintr");
 	run_test(&test_tls_handshake_eintr, "test_tls_handshake_eintr");

@@ -131,7 +131,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 		case SSL_ERROR_WANT_READ:
 			err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 			if (err.code != SA_OK) {
-				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d", err.code, pollres);
 				return err;
 			}
 			// loop back around and retry
@@ -139,7 +139,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 		case SSL_ERROR_WANT_WRITE:
 			err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 			if (err.code != SA_OK) {
-				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d", err.code, pollres);
 				return err;
 			}
 			// loop back around and retry
@@ -199,7 +199,7 @@ sa_tls_read_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_READ:
 				err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -207,7 +207,7 @@ sa_tls_read_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_WRITE:
 				err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -268,7 +268,7 @@ sa_tls_write_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_READ:
 				err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -276,7 +276,7 @@ sa_tls_write_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_WRITE:
 				err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry

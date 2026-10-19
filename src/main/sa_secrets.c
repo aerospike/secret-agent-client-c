@@ -95,7 +95,7 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 
 	err = sa_read_n_bytes(sock, SA_HEADER_SIZE, header, timeout_ms);
 	if (err.code != SA_OK) {
-		sa_g_log_function("ERR: failed reading secret header, errno: %d", errno);
+		sa_g_log_function("ERR: failed reading secret header");
 		return err;
 	}
 
@@ -119,7 +119,7 @@ sa_request_secret(char** resp, sa_socket* sock, const char* rsrc_substr, uint32_
 
 	err = sa_read_n_bytes(sock, recv_json_sz, recv_json, timeout_ms);
 	if (err.code != SA_OK) {
-		sa_g_log_function("ERR: failed reading secret errno: %d", errno);
+		sa_g_log_function("ERR: failed reading secret");
 		return err;
 	}
 

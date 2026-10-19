@@ -282,7 +282,7 @@ _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 	{
 		err = sa_socket_wait(sock, timeout_ms, true, &poll_res);
 		if (err.code != SA_OK) {
-			sa_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
+			sa_g_log_function("ERR: socket poll failed on read, return value: %d, revent: %d", err.code, poll_res);
 			return err;
 		}
 
@@ -317,7 +317,7 @@ _write_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 	{
 		err = sa_socket_wait(sock, timeout_ms, false, &poll_res);
 		if (err.code != SA_OK) {
-			sa_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d, errno: %d", err.code, poll_res, errno);
+			sa_g_log_function("ERR: socket poll failed on write, return value: %d, revent: %d", err.code, poll_res);
 			return err;
 		}
 
