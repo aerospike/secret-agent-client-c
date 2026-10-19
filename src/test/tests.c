@@ -1006,6 +1006,41 @@ void test_connect_deadline_after_refused()
 	assert(strstr(g_log, "ERR: connect timed out\n") != NULL);
 }
 
+// 0 leaves no time to dial, so a refused port still reports a timeout.
+void test_zero_timeout()
+{
+	char port[8];
+	int lfd = listen_on("127.0.0.1", 1, port, sizeof(port));
+	assert(lfd >= 0);
+	close(lfd);
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", port, NULL, false, 0, &err, &elapsed);
+
+	assert(err.code == SA_FAILED_TIMEOUT);
+	assert(elapsed < TIMING_MARGIN_MS);
+	assert(strstr(g_log, "ERR: connect timed out\n") != NULL);
+}
+
+// The agent answers after the 1000 ms default, so a negative timeout must mean no limit.
+void test_negative_timeout()
+{
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", "agent", SECRET_RESPONSE);
+	assert(started);
+	a.delay_ms = 1200;
+
+	sa_err err;
+	uint64_t elapsed;
+	timed_fetch("127.0.0.1", a.port, "ca", true, -1, &err, &elapsed);
+	agent_stop(&a);
+
+	assert(err.code == SA_OK);
+	assert(a.answered);
+	assert(elapsed >= 1200);
+}
+
 void test_tls_handshake_timeout()
 {
 	char port[8];
@@ -1515,6 +1550,8 @@ int main(int argc, char const *argv[])
 	run_test(&test_connect_unroutable_address, "test_connect_unroutable_address");
 	run_test(&test_connect_refused_fails_fast, "test_connect_refused_fails_fast");
 	run_test(&test_connect_deadline_after_refused, "test_connect_deadline_after_refused");
+	run_test(&test_zero_timeout, "test_zero_timeout");
+	run_test(&test_negative_timeout, "test_negative_timeout");
 	run_test(&test_tls_handshake_timeout, "test_tls_handshake_timeout");
 	run_test(&test_read_timeout_log, "test_read_timeout_log");
 	run_test(&test_bad_response_not_logged, "test_bad_response_not_logged");
