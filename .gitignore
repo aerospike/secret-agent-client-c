@@ -56,3 +56,6 @@ target/
 
 # Dev
 .vscode/
+
+# Tests
+src/test/tests

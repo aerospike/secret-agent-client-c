@@ -24,11 +24,12 @@ void sa_init_openssl();
 
 /*
  * sa_wrap_socket creates an SSL context
- * for the sa_socket
+ * for the sa_socket that verifies the peer's
+ * certificate chain and that it covers host.
  * SUCCESS: 0 is returned.
  * FAILURE: A value other than 0 is returned.
 */
-int sa_wrap_socket(sa_socket* sock);
+int sa_wrap_socket(sa_socket* sock, const char* host);
 
 /*
  * sa_tls_connect attempts to perform a tls

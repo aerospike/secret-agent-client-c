@@ -19,11 +19,13 @@
 #include "sa_socket.h"
 #include "sa_logging.h"
 
+#include <arpa/inet.h>
 #include <openssl/conf.h>
 #include <openssl/crypto.h>
 #include <openssl/engine.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 #include <stdbool.h>
 #include <pthread.h>
 
@@ -45,6 +47,8 @@ static bool SA_TLS_INITIALIZED = false;
 
 static SSL_CTX* create_context();
 static bool tls_load_ca_str(SSL_CTX* ctx, const char* cert_str);
+static bool tls_set_peer_name(SSL* ssl, const char* host);
+static void log_verify_details(sa_socket* sock);
 
 //==========================================================
 // Public API.
@@ -67,7 +71,7 @@ sa_init_openssl()
 }
 
 int
-sa_wrap_socket(sa_socket* sock)
+sa_wrap_socket(sa_socket* sock, const char* host)
 {
 	SSL_CTX* ctx = create_context();
 	if (ctx == NULL) {
@@ -86,6 +90,12 @@ sa_wrap_socket(sa_socket* sock)
 	SSL_CTX_free(ctx);
 	if (ssl == NULL) {
 		sa_g_log_function("ERR: unable to create new SSL context");
+		return -1;
+	}
+
+	if (!tls_set_peer_name(ssl, host)) {
+		SSL_free(ssl);
+		sa_g_log_function("ERR: unable to set TLS peer name: %s", host);
 		return -1;
 	}
 
@@ -121,7 +131,7 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 		case SSL_ERROR_WANT_READ:
 			err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 			if (err.code != SA_OK) {
-				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d", err.code, pollres);
 				return err;
 			}
 			// loop back around and retry
@@ -129,13 +139,13 @@ sa_tls_connect(sa_socket* sock, int timeout_ms)
 		case SSL_ERROR_WANT_WRITE:
 			err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 			if (err.code != SA_OK) {
-				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+				sa_g_log_function("ERR: socket poll failed on tls connect, return value: %d, revent: %d", err.code, pollres);
 				return err;
 			}
 			// loop back around and retry
 			break;
 		case SSL_ERROR_SSL:
-			// TODO log_verify_details(sock);
+			log_verify_details(sock);
 			errcode = ERR_get_error();
 			ERR_error_string_n(errcode, errbuf, sizeof(errbuf));
 			sa_g_log_function("ERR: SSL_connect failed: %s", errbuf);
@@ -189,7 +199,7 @@ sa_tls_read_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_READ:
 				err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -197,7 +207,7 @@ sa_tls_read_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_WRITE:
 				err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls read, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -258,7 +268,7 @@ sa_tls_write_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_READ:
 				err = sa_socket_wait(sock, timeout_ms, true, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -266,7 +276,7 @@ sa_tls_write_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			case SSL_ERROR_WANT_WRITE:
 				err = sa_socket_wait(sock, timeout_ms, false, &pollres);
 				if (err.code != SA_OK) {
-					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d, errno: %d", err.code, pollres, errno);
+					sa_g_log_function("ERR: socket poll failed on tls write, return value: %d, revent: %d", err.code, pollres);
 					return err;
 				}
 				// loop back around and retry
@@ -318,9 +328,36 @@ create_context()
 	ctx = SSL_CTX_new(method);
 	if (!ctx) {
 		sa_g_log_function("unable to create SSL context");
+		return NULL;
 	}
 
+	SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+
 	return ctx;
+}
+
+static bool
+tls_set_peer_name(SSL* ssl, const char* host)
+{
+	struct in6_addr ip;
+
+	if (inet_pton(AF_INET, host, &ip) == 1 || inet_pton(AF_INET6, host, &ip) == 1) {
+		return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), host) == 1;
+	}
+
+	SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+
+	return X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host, 0) == 1 && SSL_set_tlsext_host_name(ssl, host) == 1;
+}
+
+static void
+log_verify_details(sa_socket* sock)
+{
+	long rv = SSL_get_verify_result(sock->ssl);
+
+	if (rv != X509_V_OK) {
+		sa_g_log_function("ERR: SSL_connect certificate verify failed: %s (%ld)", X509_verify_cert_error_string(rv), rv);
+	}
 }
 
 static bool
