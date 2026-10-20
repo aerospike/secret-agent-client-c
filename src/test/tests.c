@@ -33,6 +33,7 @@
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <poll.h>
@@ -51,6 +52,7 @@
 #include <unistd.h>
 
 #define SA_MAGIC 0x51dec1cc
+#define SA_HEADER_SIZE 8
 
 #define SECRET "127.0.0.1"
 #define SECRET_RESPONSE "{\"SecretValue\":\"MTI3LjAuMC4x\"}"
@@ -64,6 +66,8 @@
 #define CONNECT_TIMEOUT_MS 500
 #define TIMING_MARGIN_MS 300
 #define MAX_BACKLOG_FILL 64
+#define CHUNK_GAP_MS 20
+#define HOLD_OPEN_MS 1000
 
 typedef struct fake_agent_s {
 	int fd;
@@ -72,6 +76,9 @@ typedef struct fake_agent_s {
 	SSL_CTX* ctx;
 	const char* response;
 	int delay_ms;
+	size_t truncate_reply_at;
+	size_t chunk_len;
+	int hold_open_ms;
 	char sni[256];
 	char resource[64];
 	char key[64];
@@ -87,6 +94,9 @@ static char g_log[16384];
 static char g_skipped[1024];
 static int g_socket_delay_ms;
 static int g_delayed_sockets;
+static pthread_t g_main_thread;
+static bool g_count_reads;
+static int g_client_reads;
 
 // The library is linked in statically, so its socket() calls land here. Lets a test slow down connecting.
 int
@@ -104,6 +114,23 @@ socket(int domain, int type, int protocol)
 	}
 
 	return real_socket(domain, type, protocol);
+}
+
+// Counts the main thread's reads while g_count_reads is set. Reads inside OpenSSL may not land here.
+ssize_t
+read(int fd, void* buf, size_t n)
+{
+	static ssize_t (*real_read)(int, void*, size_t);
+
+	if (real_read == NULL) {
+		real_read = (ssize_t (*)(int, void*, size_t))dlsym(RTLD_NEXT, "read");
+	}
+
+	if (g_count_reads && pthread_equal(pthread_self(), g_main_thread)) {
+		g_client_reads++;
+	}
+
+	return real_read(fd, buf, n);
 }
 
 void mylog(const char* format, ...)
@@ -304,10 +331,27 @@ agent_answer(fake_agent* a, int fd, SSL* ssl)
 	header[0] = htonl(SA_MAGIC);
 	header[1] = htonl((uint32_t)len);
 
-	if (agent_io(fd, ssl, header, sizeof(header), true) &&
-			agent_io(fd, ssl, (void*)a->response, len, true)) {
-		a->answered = true;
+	size_t reply_len = sizeof(header) + len;
+	char* reply = malloc(reply_len);
+	assert(reply != NULL);
+	memcpy(reply, header, sizeof(header));
+	memcpy(reply + sizeof(header), a->response, len);
+
+	size_t send_len = a->truncate_reply_at != 0 ? a->truncate_reply_at : reply_len;
+	size_t step = a->chunk_len != 0 ? a->chunk_len : send_len;
+	bool sent = true;
+
+	for (size_t off = 0; sent && off < send_len; off += step) {
+		if (off != 0) {
+			usleep(CHUNK_GAP_MS * 1000);
+		}
+
+		sent = agent_io(fd, ssl, reply + off, send_len - off < step ? send_len - off : step, true);
 	}
+
+	free(reply);
+	a->answered = sent;
+	usleep((useconds_t)a->hold_open_ms * 1000);
 }
 
 static void*
@@ -336,6 +380,11 @@ agent_serve(void* arg)
 	struct timeval tv = { .tv_sec = 5 };
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+	if (a->chunk_len != 0) {
+		int one = 1;
+		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+	}
 
 	SSL* ssl = NULL;
 
@@ -803,21 +852,185 @@ void test_request_resource_with_colons()
 	assert(a.has_resource && !strcmp("a:b", a.resource) && !strcmp("pass", a.key));
 }
 
-typedef struct fetch_job_s {
-	const char* port;
-	const char* path;
-	sa_err err;
-} fetch_job;
-
-static void*
-fetch_job_run(void* arg)
+void test_request_escaping()
 {
-	fetch_job* j = (fetch_job*)arg;
-	j->err = fetch("127.0.0.1", j->port, NULL, false, 2000, j->path);
-	return NULL;
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
+	assert(started);
+
+	sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, "secrets:a\"b\\c:d\"e\\f");
+	agent_stop(&a);
+
+	assert(err.code == SA_OK);
+	assert(a.has_resource && !strcmp("a\"b\\c", a.resource) && !strcmp("d\"e\\f", a.key));
+}
+
+static void
+truncated_reply_case(const char* cert, size_t cut_at, size_t chunk_len)
+{
+	bool tls = cert != NULL;
+	size_t body_len = strlen(SECRET_RESPONSE);
+	bool in_header = cut_at < SA_HEADER_SIZE;
+
+	fake_agent a;
+	bool started = agent_start(&a, "127.0.0.1", cert, SECRET_RESPONSE);
+	assert(started);
+	a.truncate_reply_at = cut_at;
+	a.chunk_len = chunk_len;
+
+	g_log[0] = 0;
+	sa_err err = fetch("127.0.0.1", a.port, tls ? "ca" : NULL, tls, 2000, "secrets:pass:pass");
+	agent_stop(&a);
+
+	char closed_line[128];
+	snprintf(closed_line, sizeof(closed_line), "ERR: socket closed after %zu of %zu bytes",
+			in_header ? cut_at : cut_at - SA_HEADER_SIZE, in_header ? (size_t)SA_HEADER_SIZE : body_len);
+
+	const char* read_line = in_header ? "ERR: failed reading secret header" : "ERR: failed reading secret";
+	const char* const expected[] = {
+		tls ? "ERR: SSL_read*" : closed_line,
+		read_line,
+		"ERR: empty secret json response"
+	};
+
+	char want[256];
+	snprintf(want, sizeof(want), "%s\n%s\n", tls ? "" : closed_line, read_line);
+
+	assert(err.code == SA_FAILED_INTERNAL);
+	assert(strstr(g_log, want) != NULL);
+	assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
+}
+
+// The agent closes the connection partway through the header, at its end, partway through
+// the body and one byte short of the end, over plain TCP and TLS, sending it whole or in pieces.
+void test_truncated_reply()
+{
+	size_t body_len = strlen(SECRET_RESPONSE);
+	size_t cut_at[] = { 4, SA_HEADER_SIZE, SA_HEADER_SIZE + 10, SA_HEADER_SIZE + body_len - 1 };
+	const char* certs[] = { NULL, "agent" };
+	size_t chunk_lens[] = { 0, 3 };
+
+	for (size_t c = 0; c < sizeof(certs) / sizeof(certs[0]); c++) {
+		for (size_t i = 0; i < sizeof(cut_at) / sizeof(cut_at[0]); i++) {
+			for (size_t k = 0; k < sizeof(chunk_lens) / sizeof(chunk_lens[0]); k++) {
+				truncated_reply_case(certs[c], cut_at[i], chunk_lens[k]);
+			}
+		}
+	}
+}
+
+// The agent sends a header with a zero-length body. Only the bad JSON is reported, not a read error.
+void test_empty_reply()
+{
+	const char* certs[] = { NULL, "agent" };
+	const char* const expected[] = {
+		"ERR: failed to parse response JSON line *",
+		"ERR: unable to fetch secret"
+	};
+
+	for (size_t i = 0; i < sizeof(certs) / sizeof(certs[0]); i++) {
+		bool tls = certs[i] != NULL;
+		fake_agent a;
+		bool started = agent_start(&a, "127.0.0.1", certs[i], "");
+		assert(started);
+
+		g_log[0] = 0;
+		sa_err err = fetch("127.0.0.1", a.port, tls ? "ca" : NULL, tls, 2000, "secrets:pass:pass");
+		agent_stop(&a);
+
+		assert(err.code == SA_FAILED_BAD_REQUEST);
+		assert(strstr(g_log, "ERR: failed to parse response JSON line") != NULL);
+		assert_log_lines(expected, sizeof(expected) / sizeof(expected[0]));
+	}
+}
+
+// The agent closes right after a full reply. Repeated so the close races the client's last read.
+void test_success_logs_nothing()
+{
+	const char* certs[] = { NULL, "agent" };
+
+	for (size_t i = 0; i < sizeof(certs) / sizeof(certs[0]); i++) {
+		for (int run = 0; run < 25; run++) {
+			bool tls = certs[i] != NULL;
+			fake_agent a;
+			bool started = agent_start(&a, "127.0.0.1", certs[i], SECRET_RESPONSE);
+			assert(started);
+
+			g_log[0] = 0;
+			sa_err err = fetch("127.0.0.1", a.port, tls ? "ca" : NULL, tls, 2000, "secrets:pass:pass");
+			agent_stop(&a);
+
+			assert(err.code == SA_OK);
+			assert(a.answered);
+			assert(g_log[0] == '\0');
+		}
+	}
+}
+
+// The agent writes its reply a few bytes at a time, so the client puts it together from several reads.
+void test_reply_in_pieces()
+{
+	const char* certs[] = { NULL, "agent" };
+
+	for (size_t i = 0; i < sizeof(certs) / sizeof(certs[0]); i++) {
+		bool tls = certs[i] != NULL;
+		fake_agent a;
+		bool started = agent_start(&a, "127.0.0.1", certs[i], SECRET_RESPONSE);
+		assert(started);
+		a.chunk_len = 5;
+
+		g_log[0] = 0;
+		g_client_reads = 0;
+		g_count_reads = true;
+		sa_err err = fetch("127.0.0.1", a.port, tls ? "ca" : NULL, tls, 2000, "secrets:pass:pass");
+		g_count_reads = false;
+		agent_stop(&a);
+
+		printf("client reads: %d\n", g_client_reads);
+		assert(err.code == SA_OK);
+		assert(a.answered);
+		assert(g_log[0] == '\0');
+		assert(tls || g_client_reads > 2);
+	}
+}
+
+// The agent keeps the connection open after replying. The client returns once it has the reply,
+// without waiting for the agent to close, including when the body is empty.
+void test_reply_held_open()
+{
+	const char* responses[] = { SECRET_RESPONSE, "" };
+	const char* certs[] = { NULL, "agent" };
+	const char* const empty_lines[] = {
+		"ERR: failed to parse response JSON line *",
+		"ERR: unable to fetch secret"
+	};
+
+	for (size_t r = 0; r < sizeof(responses) / sizeof(responses[0]); r++) {
+		for (size_t i = 0; i < sizeof(certs) / sizeof(certs[0]); i++) {
+			bool tls = certs[i] != NULL;
+			fake_agent a;
+			bool started = agent_start(&a, "127.0.0.1", certs[i], responses[r]);
+			assert(started);
+			a.hold_open_ms = HOLD_OPEN_MS;
+
+			g_log[0] = 0;
+			sa_err err;
+			uint64_t elapsed;
+			timed_fetch("127.0.0.1", a.port, tls ? "ca" : NULL, tls, 2 * HOLD_OPEN_MS, &err, &elapsed);
+			agent_stop(&a);
+
+			bool empty = responses[r][0] == '\0';
+
+			assert(err.code == (empty ? SA_FAILED_BAD_REQUEST : SA_OK));
+			assert(elapsed < HOLD_OPEN_MS / 2);
+			assert(empty || g_log[0] == '\0');
+			assert_log_lines(empty_lines, sizeof(empty_lines) / sizeof(empty_lines[0]));
+		}
+	}
 }
 
 // The agent rejects the oversized request and closes the connection while it is still being written.
+// The 16 MB key is larger than the default stack, so this also checks the request is not built there.
 void test_request_write_failure_log()
 {
 	const char* prefix = "secrets:res:";
@@ -831,21 +1044,7 @@ void test_request_write_failure_log()
 	bool started = agent_start(&a, "127.0.0.1", NULL, SECRET_RESPONSE);
 	assert(started);
 
-	// the library builds the request on the stack
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);
-
-	fetch_job j = {
-		.port = a.port,
-		.path = path
-	};
-
-	pthread_t t;
-	int rv = pthread_create(&t, &attr, fetch_job_run, &j);
-	assert(rv == 0);
-	pthread_join(t, NULL);
-	pthread_attr_destroy(&attr);
+	sa_err err = fetch("127.0.0.1", a.port, NULL, false, 2000, path);
 	agent_stop(&a);
 	free(path);
 
@@ -857,7 +1056,7 @@ void test_request_write_failure_log()
 		"ERR: empty secret json response"
 	};
 
-	assert(j.err.code != SA_OK);
+	assert(err.code != SA_OK);
 	assert(!a.answered);
 	assert(strstr(g_log, "ERR: failed asking for secret\n") != NULL);
 	assert(strstr(g_log, "KKKK") == NULL);
@@ -1520,6 +1719,7 @@ int main(int argc, char const *argv[])
 	}
 
 	g_cert_dir = argv[1];
+	g_main_thread = pthread_self();
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGALRM, on_watchdog);
@@ -1530,6 +1730,12 @@ int main(int argc, char const *argv[])
 	run_test(&test_sa_secret_get_bytes_bad_secret, "test_sa_secret_get_bytes_bad_secret");
 	run_test(&test_sa_secret_get_bytes_missing_resource_name, "test_sa_secret_get_bytes_missing_resource_name");
 	run_test(&test_request_resource_with_colons, "test_request_resource_with_colons");
+	run_test(&test_request_escaping, "test_request_escaping");
+	run_test(&test_truncated_reply, "test_truncated_reply");
+	run_test(&test_empty_reply, "test_empty_reply");
+	run_test(&test_success_logs_nothing, "test_success_logs_nothing");
+	run_test(&test_reply_in_pieces, "test_reply_in_pieces");
+	run_test(&test_reply_held_open, "test_reply_held_open");
 	run_test(&test_request_write_failure_log, "test_request_write_failure_log");
 	run_test(&test_sa_secret_get_bytes_tls, "test_sa_secret_get_bytes_tls");
 	run_test(&test_tls_ipv4_literal, "test_tls_ipv4_literal");

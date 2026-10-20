@@ -85,7 +85,7 @@ endif
 CFLAGS :=
 CFLAGS += -fPIC
 CFLAGS += -g
-CFLAGS += -o2
+CFLAGS += -O2
 
 ARFLAGS :=
 ARFLAGS += rvs
