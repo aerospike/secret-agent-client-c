@@ -279,7 +279,7 @@ _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 
 	int total_bytes_read = 0;
 	short poll_res = 0;
-	while (true)
+	while (total_bytes_read < n)
 	{
 		err = sa_socket_wait(sock, timeout_ms, true, &poll_res);
 		if (err.code != SA_OK) {
@@ -301,10 +301,9 @@ _read_n_bytes(sa_socket* sock, unsigned int n, void* buffer, int timeout_ms)
 		}
 
 		total_bytes_read += bytes_read;
-		if (total_bytes_read >= n) {
-			return err;
-		}
 	}
+
+	return err;
 }
 
 sa_err

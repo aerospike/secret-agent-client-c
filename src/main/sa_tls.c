@@ -179,16 +179,13 @@ sa_err
 sa_tls_read_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 {
 	sa_err err;
+	err.code = SA_OK;
 	size_t bytes_read = 0;
 
-	while (true) {
-		err.code = SA_OK;
+	while (bytes_read < n) {
 		int rv = SSL_read(sock->ssl, buf + bytes_read, (int)(n - bytes_read));
 		if (rv > 0) {
 			bytes_read += rv;
-			if (bytes_read >= n) {
-				return err;
-			}
 		}
 		else {
 			int sslerr = SSL_get_error(sock->ssl, rv);
@@ -242,6 +239,8 @@ sa_tls_read_n_bytes(sa_socket* sock, size_t n, void* buf, int timeout_ms)
 			}
 		}
 	}
+
+	return err;
 }
 
 sa_err
